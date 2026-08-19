@@ -28,8 +28,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	store := newCategoryStore()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/categories", categoriesHandler(store))
 
 	addr := ":8080"
 	log.Printf("starting server on %s", addr)

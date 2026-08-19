@@ -9,6 +9,7 @@ import (
 
 func TestHealthHandler(t *testing.T) {
 	tests := []struct {
+		// Table-driven: same test logic runs for each case.
 		name       string
 		method     string
 		wantStatus int
@@ -26,12 +27,18 @@ func TestHealthHandler(t *testing.T) {
 			wantStatus: http.StatusMethodNotAllowed,
 			wantBody:   "method not allowed\n",
 		},
+		{
+			name:       "DELETE is not allowed",
+			method:     http.MethodDelete,
+			wantStatus: http.StatusMethodNotAllowed,
+			wantBody:   "method not allowed\n",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "/health", nil)
-			rec := httptest.NewRecorder()
+			rec := httptest.NewRecorder() //Writer handles the response
 
 			healthHandler(rec, req)
 
