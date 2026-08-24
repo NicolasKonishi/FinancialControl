@@ -1,4 +1,4 @@
-import type { Category, Member, MonthlyForecast, Transaction } from './types'
+import type { Bill, Category, Member, MonthlyForecast, Transaction } from './types'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
 
@@ -32,6 +32,34 @@ export const api = {
   updateMember: (id: number, body: { name: string; monthly_salary: number }) =>
     request<Member>(`/members/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteMember: (id: number) => request<void>(`/members/${id}`, { method: 'DELETE' }),
+
+  listBills: () => request<Bill[]>('/bills'),
+  createBill: (body: {
+    name: string
+    amount: number
+    category_id: number
+    member_ids: number[]
+    due_day: number
+    recurrence: 'ongoing' | 'until'
+    start_month: string
+    end_month?: string | null
+    notes?: string
+  }) => request<Bill>('/bills', { method: 'POST', body: JSON.stringify(body) }),
+  updateBill: (
+    id: number,
+    body: {
+      name: string
+      amount: number
+      category_id: number
+      member_ids: number[]
+      due_day: number
+      recurrence: 'ongoing' | 'until'
+      start_month: string
+      end_month?: string | null
+      notes?: string
+    },
+  ) => request<Bill>(`/bills/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteBill: (id: number) => request<void>(`/bills/${id}`, { method: 'DELETE' }),
 
   listTransactions: () => request<Transaction[]>('/transactions'),
   createTransaction: (body: {

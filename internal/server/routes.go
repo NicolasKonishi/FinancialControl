@@ -19,6 +19,11 @@ type Dependencies struct {
 func New(deps Dependencies) http.Handler {
 	categories := &handlers.Categories{Store: deps.Store}
 	members := &handlers.Members{Store: deps.Store}
+	bills := &handlers.Bills{
+		Store:      deps.Store,
+		Categories: deps.Store,
+		Members:    deps.Store,
+	}
 	transactions := &handlers.Transactions{
 		Store:      deps.Store,
 		Categories: deps.Store,
@@ -42,6 +47,10 @@ func New(deps Dependencies) http.Handler {
 	mux.HandleFunc("/members", members.ListOrCreate)
 	mux.HandleFunc("PUT /members/{id}", members.Update)
 	mux.HandleFunc("DELETE /members/{id}", members.Delete)
+
+	mux.HandleFunc("/bills", bills.ListOrCreate)
+	mux.HandleFunc("PUT /bills/{id}", bills.Update)
+	mux.HandleFunc("DELETE /bills/{id}", bills.Delete)
 
 	mux.HandleFunc("/transactions", transactions.ListOrCreate)
 	mux.HandleFunc("GET /transactions/{id}", transactions.GetByID)

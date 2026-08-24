@@ -36,12 +36,25 @@ export type Transaction = {
   created_at: string
 }
 
+export type MemberForecast = {
+  member_id: number
+  member_name: string
+  planned_salary: number
+  extra_income: number
+  total_available: number
+  bill_share: number
+  variable_expense: number
+  total_to_pay: number
+  remaining: number
+}
+
 export type MonthlyForecast = {
   year: number
   month: number
   planned_salary: number
   extra_income: number
   total_available: number
+  planned_bills: number
   total_expense: number
   remaining: number
   days_in_month: number
@@ -50,4 +63,19 @@ export type MonthlyForecast = {
   projected_expense: number
   safe_daily_spend: number
   expense_pace_ratio: number
+  by_member: MemberForecast[]
+}
+
+export type Bill = {
+  id: number
+  name: string
+  amount: number
+  category_id: number
+  member_ids: number[]
+  due_day: number
+  recurrence: 'ongoing' | 'until'
+  start_month: string
+  end_month?: string | null
+  notes?: string
+  created_at: string
 }
