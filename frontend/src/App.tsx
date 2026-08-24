@@ -3,11 +3,11 @@ import type { FormEvent } from 'react'
 import { api } from './api'
 import { CategoryGlyph } from './icons'
 import { applyTheme, getPreferredTheme, persistTheme, type Theme } from './theme'
-import type { Category, Member, MonthlyForecast, Transaction } from './types'
+import type { Bill, Category, Member, MonthlyForecast, Transaction } from './types'
 import './index.css'
 
-type View = 'home' | 'ledger' | 'family'
-type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | null
+type View = 'home' | 'ledger' | 'bills' | 'family'
+type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | null
 
 const currency = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
@@ -23,6 +23,11 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
 
+function currentMonthKey() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
 function formatDate(value: string) {
   return value.slice(0, 10)
 }
@@ -36,14 +41,17 @@ export default function App() {
 
   const [categories, setCategories] = useState<Category[]>([])
   const [members, setMembers] = useState<Member[]>([])
+  const [bills, setBills] = useState<Bill[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [forecast, setForecast] = useState<MonthlyForecast | null>(null)
+  const [memberFilter, setMemberFilter] = useState<number | 'all'>('all')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
   const [sheet, setSheet] = useState<SheetMode>(null)
   const [editingTxId, setEditingTxId] = useState<number | null>(null)
   const [editingMemberId, setEditingMemberId] = useState<number | null>(null)
+  const [editingBillId, setEditingBillId] = useState<number | null>(null)
 
   const [txForm, setTxForm] = useState({
     category_id: 0,
@@ -53,6 +61,17 @@ export default function App() {
     date: todayISO(),
   })
   const [memberForm, setMemberForm] = useState({ name: '', monthly_salary: '' })
+  const [billForm, setBillForm] = useState({
+    name: '',
+    amount: '',
+    category_id: 0,
+    member_ids: [] as number[],
+    due_day: '10',
+    recurrence: 'ongoing' as 'ongoing' | 'until',
+    start_month: currentMonthKey(),
+    end_month: '',
+    notes: '',
+  })
 
   const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
@@ -61,29 +80,56 @@ export default function App() {
     const prefix = `${year}-${String(month).padStart(2, '0')}`
     return [...transactions]
       .filter((tx) => formatDate(tx.date).startsWith(prefix))
+      .filter((tx) => {
+        if (memberFilter === 'all') return true
+        return tx.member_id === memberFilter
+      })
       .sort((a, b) => formatDate(b.date).localeCompare(formatDate(a.date)) || b.id - a.id)
-  }, [transactions, year, month])
+  }, [transactions, year, month, memberFilter])
+
+  const monthBills = useMemo(() => {
+    return bills.filter((bill) => {
+      const target = `${year}-${String(month).padStart(2, '0')}`
+      if (target < bill.start_month) return false
+      if (bill.recurrence !== 'ongoing' && bill.end_month && target > bill.end_month) return false
+      if (memberFilter === 'all') return true
+      return (bill.member_ids ?? []).includes(memberFilter)
+    })
+  }, [bills, year, month, memberFilter])
+
+  const selectedMemberForecast = useMemo(() => {
+    const list = forecast?.by_member ?? []
+    if (memberFilter === 'all') return null
+    return list.find((item) => item.member_id === memberFilter) ?? null
+  }, [forecast, memberFilter])
 
   async function refresh() {
     setError('')
     setLoading(true)
     try {
-      const [cats, mems, txs, fc] = await Promise.all([
+      const [cats, mems, txs, billList, fc] = await Promise.all([
         api.listCategories(),
         api.listMembers(),
         api.listTransactions(),
+        api.listBills(),
         api.monthlyForecast(year, month),
       ])
       setCategories(cats)
       setMembers(mems)
       setTransactions(txs)
+      setBills(billList)
       setForecast(fc)
 
       const expenseCat = cats.find((c) => c.icon === 'market') ?? cats[0]
+      const homeCat = cats.find((c) => c.icon === 'home') ?? expenseCat
       setTxForm((prev) => ({
         ...prev,
         category_id: prev.category_id || expenseCat?.id || 0,
         member_id: prev.member_id || mems[0]?.id || 0,
+      }))
+      setBillForm((prev) => ({
+        ...prev,
+        category_id: prev.category_id || homeCat?.id || 0,
       }))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao carregar')
@@ -114,8 +160,22 @@ export default function App() {
   function openSheet(mode: SheetMode) {
     setEditingTxId(null)
     setEditingMemberId(null)
+    setEditingBillId(null)
     if (mode === 'member') {
       setMemberForm({ name: '', monthly_salary: '' })
+    } else if (mode === 'bill') {
+      const home = categories.find((c) => c.icon === 'home') ?? categories[0]
+      setBillForm({
+        name: '',
+        amount: '',
+        category_id: home?.id || 0,
+        member_ids: members.map((m) => m.id),
+        due_day: '10',
+        recurrence: 'ongoing',
+        start_month: currentMonthKey(),
+        end_month: '',
+        notes: '',
+      })
     } else if (mode === 'freelance') {
       const freelance = categories.find((c) => c.icon === 'freelance') ?? categories[0]
       setTxForm({
@@ -194,6 +254,36 @@ export default function App() {
     }
   }
 
+  async function submitBill(event: FormEvent) {
+    event.preventDefault()
+    if (!billForm.category_id) {
+      setError('Selecione uma categoria para a conta.')
+      return
+    }
+    const payload = {
+      name: billForm.name,
+      amount: Number(billForm.amount),
+      category_id: billForm.category_id,
+      member_ids: billForm.member_ids,
+      due_day: Number(billForm.due_day),
+      recurrence: billForm.recurrence,
+      start_month: billForm.start_month,
+      end_month: billForm.recurrence === 'until' ? billForm.end_month : null,
+      notes: billForm.notes,
+    }
+    try {
+      if (editingBillId) {
+        await api.updateBill(editingBillId, payload)
+      } else {
+        await api.createBill(payload)
+      }
+      setSheet(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao salvar conta')
+    }
+  }
+
   const usedRatio = forecast
     ? Math.min(1, forecast.total_available > 0 ? forecast.projected_expense / forecast.total_available : 0)
     : 0
@@ -204,7 +294,7 @@ export default function App() {
       <header className="top">
         <div>
           <h1>Fluxo</h1>
-          <p>Família · salário · gastos</p>
+          <p>Família · contas · gastos</p>
         </div>
         <div className="top-controls">
           <button
@@ -240,42 +330,120 @@ export default function App() {
       {error ? <div className="error">{error}</div> : null}
       {loading ? <div className="empty">Carregando…</div> : null}
 
+      <div className="filter-bar" aria-label="Filtro por pessoa">
+        <button
+          type="button"
+          className={memberFilter === 'all' ? 'chip active' : 'chip'}
+          onClick={() => setMemberFilter('all')}
+        >
+          Toda a família
+        </button>
+        {members.map((member) => (
+          <button
+            key={member.id}
+            type="button"
+            className={memberFilter === member.id ? 'chip active' : 'chip'}
+            onClick={() => setMemberFilter(member.id)}
+          >
+            {member.name}
+          </button>
+        ))}
+      </div>
+
+      {memberFilter !== 'all' && selectedMemberForecast && (
+        <section className="card">
+          <h2>{selectedMemberForecast.member_name} neste mês</h2>
+          <p className={`hero-value ${selectedMemberForecast.remaining < 0 ? 'neg' : 'pos'}`}>
+            {currency.format(selectedMemberForecast.remaining)}
+          </p>
+          <p className="meta">sobra pessoal após contas e gastos</p>
+          <div className="metrics">
+            <div className="metric">
+              <span>Disponível</span>
+              <strong>{currency.format(selectedMemberForecast.total_available)}</strong>
+            </div>
+            <div className="metric">
+              <span>A pagar (contas)</span>
+              <strong>{currency.format(selectedMemberForecast.bill_share)}</strong>
+            </div>
+            <div className="metric">
+              <span>Gastos variáveis</span>
+              <strong>{currency.format(selectedMemberForecast.variable_expense)}</strong>
+            </div>
+            <div className="metric">
+              <span>Total a pagar</span>
+              <strong>{currency.format(selectedMemberForecast.total_to_pay)}</strong>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {memberFilter === 'all' && (forecast?.by_member?.length ?? 0) > 0 && view === 'home' && (
+        <section className="card">
+          <h2>Por pessoa</h2>
+          <p className="meta" style={{ marginBottom: '0.85rem' }}>
+            Quanto cada um paga e quanto sobra no mês.
+          </p>
+          <div className="list">
+            {(forecast?.by_member ?? []).map((item) => (
+              <article key={item.member_id} className="row">
+                <div className="icon-wrap">
+                  <CategoryGlyph icon="salary" />
+                </div>
+                <div>
+                  <h3>{item.member_name}</h3>
+                  <p>
+                    pagar {currency.format(item.total_to_pay)} · contas{' '}
+                    {currency.format(item.bill_share)}
+                  </p>
+                </div>
+                <div className={`amount ${item.remaining < 0 ? 'expense' : 'income'}`}>
+                  {currency.format(item.remaining)}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       {view === 'home' && (
         <>
-          <section className="card">
-            <h2>Previsão do mês</h2>
-            <p className={`hero-value ${(forecast?.remaining ?? 0) < 0 ? 'neg' : 'pos'}`}>
-              {currency.format(forecast?.remaining ?? 0)}
-            </p>
-            <p className="meta">
-              sobrando de {currency.format(forecast?.total_available ?? 0)} disponíveis
-            </p>
-            <div className="metrics">
-              <div className="metric">
-                <span>Salários planejados</span>
-                <strong>{currency.format(forecast?.planned_salary ?? 0)}</strong>
+          {memberFilter === 'all' && (
+            <section className="card">
+              <h2>Previsão do mês</h2>
+              <p className={`hero-value ${(forecast?.remaining ?? 0) < 0 ? 'neg' : 'pos'}`}>
+                {currency.format(forecast?.remaining ?? 0)}
+              </p>
+              <p className="meta">
+                sobrando de {currency.format(forecast?.total_available ?? 0)} disponíveis
+              </p>
+              <div className="metrics">
+                <div className="metric">
+                  <span>Salários planejados</span>
+                  <strong>{currency.format(forecast?.planned_salary ?? 0)}</strong>
+                </div>
+                <div className="metric">
+                  <span>Extras / freelancer</span>
+                  <strong>{currency.format(forecast?.extra_income ?? 0)}</strong>
+                </div>
+                <div className="metric">
+                  <span>Contas do mês</span>
+                  <strong>{currency.format(forecast?.planned_bills ?? 0)}</strong>
+                </div>
+                <div className="metric">
+                  <span>Total comprometido</span>
+                  <strong>{currency.format(forecast?.total_expense ?? 0)}</strong>
+                </div>
               </div>
-              <div className="metric">
-                <span>Extras / freelancer</span>
-                <strong>{currency.format(forecast?.extra_income ?? 0)}</strong>
+              <div className={`progress ${paceClass}`} title="Ritmo de gasto projetado">
+                <i style={{ width: `${usedRatio * 100}%` }} />
               </div>
-              <div className="metric">
-                <span>Já saiu</span>
-                <strong>{currency.format(forecast?.total_expense ?? 0)}</strong>
-              </div>
-              <div className="metric">
-                <span>Gasto previsto</span>
-                <strong>{currency.format(forecast?.projected_expense ?? 0)}</strong>
-              </div>
-            </div>
-            <div className={`progress ${paceClass}`} title="Ritmo de gasto projetado">
-              <i style={{ width: `${usedRatio * 100}%` }} />
-            </div>
-            <p className="meta">
-              Pode gastar cerca de {currency.format(forecast?.safe_daily_spend ?? 0)} por dia nos próximos{' '}
-              {forecast?.days_remaining ?? 0} dias.
-            </p>
-          </section>
+              <p className="meta">
+                Pode gastar cerca de {currency.format(forecast?.safe_daily_spend ?? 0)} por dia nos próximos{' '}
+                {forecast?.days_remaining ?? 0} dias.
+              </p>
+            </section>
+          )}
 
           <div className="actions">
             <button type="button" onClick={() => openSheet('expense')}>
@@ -328,7 +496,9 @@ export default function App() {
         <section className="card">
           <h2>Tabela do mês</h2>
           <p className="meta" style={{ marginBottom: '0.85rem' }}>
-            Entradas e saídas com categoria.
+            {memberFilter === 'all'
+              ? 'Entradas e saídas com categoria.'
+              : `Filtrado por ${selectedMemberForecast?.member_name ?? 'pessoa'}.`}
           </p>
           {monthTransactions.length === 0 ? (
             <p className="empty">Sem lançamentos neste mês.</p>
@@ -395,6 +565,90 @@ export default function App() {
           )}
           <button type="button" className="primary" onClick={() => openSheet('expense')}>
             Novo lançamento
+          </button>
+        </section>
+      )}
+
+      {view === 'bills' && (
+        <section className="card">
+          <h2>Contas mensais</h2>
+          <p className="meta" style={{ marginBottom: '0.85rem' }}>
+            {memberFilter === 'all'
+              ? 'Fixas (luz, internet) ou com término (assinatura, crédito).'
+              : `Contas em que ${selectedMemberForecast?.member_name ?? 'esta pessoa'} participa.`}
+          </p>
+          {monthBills.length === 0 ? (
+            <p className="empty">Nenhuma conta ativa neste mês.</p>
+          ) : (
+            <div className="list">
+              {monthBills.map((bill) => {
+                const cat = categoryById.get(bill.category_id)
+                const payers = (bill.member_ids ?? [])
+                  .map((id) => memberById.get(id)?.name)
+                  .filter(Boolean)
+                  .join(', ')
+                return (
+                  <article key={bill.id} className="row">
+                    <div className="icon-wrap">
+                      <CategoryGlyph icon={cat?.icon ?? 'home'} />
+                    </div>
+                    <div>
+                      <h3>{bill.name}</h3>
+                      <p>
+                        dia {bill.due_day} · {cat?.name ?? 'Categoria'} ·{' '}
+                        {bill.recurrence === 'ongoing'
+                          ? 'sempre'
+                          : `até ${bill.end_month}`}
+                        {payers ? ` · ${payers}` : ' · sem responsáveis'}
+                      </p>
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            setEditingBillId(bill.id)
+                            setBillForm({
+                              name: bill.name,
+                              amount: String(bill.amount),
+                              category_id: bill.category_id,
+                              member_ids: bill.member_ids ?? [],
+                              due_day: String(bill.due_day),
+                              recurrence: bill.recurrence,
+                              start_month: bill.start_month,
+                              end_month: bill.end_month ?? '',
+                              notes: bill.notes ?? '',
+                            })
+                            setSheet('bill')
+                          }}
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => {
+                            void (async () => {
+                              try {
+                                await api.deleteBill(bill.id)
+                                await refresh()
+                              } catch (err) {
+                                setError(err instanceof Error ? err.message : 'Erro ao excluir')
+                              }
+                            })()
+                          }}
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </div>
+                    <div className="amount expense">{currency.format(bill.amount)}</div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+          <button type="button" className="primary" onClick={() => openSheet('bill')}>
+            Nova conta
           </button>
         </section>
       )}
@@ -468,6 +722,9 @@ export default function App() {
         <button type="button" className={view === 'ledger' ? 'active' : ''} onClick={() => setView('ledger')}>
           Gastos
         </button>
+        <button type="button" className={view === 'bills' ? 'active' : ''} onClick={() => setView('bills')}>
+          Contas
+        </button>
         <button type="button" className={view === 'family' ? 'active' : ''} onClick={() => setView('family')}>
           Família
         </button>
@@ -482,6 +739,10 @@ export default function App() {
                   ? editingMemberId
                     ? 'Editar pessoa'
                     : 'Nova pessoa'
+                  : sheet === 'bill'
+                    ? editingBillId
+                      ? 'Editar conta'
+                      : 'Nova conta'
                   : sheet === 'expense'
                     ? editingTxId
                       ? 'Editar saída'
@@ -518,6 +779,129 @@ export default function App() {
                     value={memberForm.monthly_salary}
                     onChange={(e) => setMemberForm((p) => ({ ...p, monthly_salary: e.target.value }))}
                     placeholder="0,00"
+                  />
+                </label>
+                <button className="primary" type="submit">
+                  Salvar
+                </button>
+              </form>
+            ) : sheet === 'bill' ? (
+              <form className="form" onSubmit={submitBill}>
+                <label>
+                  Nome da conta
+                  <input
+                    required
+                    value={billForm.name}
+                    onChange={(e) => setBillForm((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="Internet, Luz, Netflix…"
+                  />
+                </label>
+                <label>
+                  Valor mensal
+                  <input
+                    required
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={billForm.amount}
+                    onChange={(e) => setBillForm((p) => ({ ...p, amount: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Tipo
+                  <select
+                    value={billForm.recurrence}
+                    onChange={(e) =>
+                      setBillForm((p) => ({
+                        ...p,
+                        recurrence: e.target.value as 'ongoing' | 'until',
+                      }))
+                    }
+                  >
+                    <option value="ongoing">Sempre (luz, internet…)</option>
+                    <option value="until">Com término (assinatura, crédito…)</option>
+                  </select>
+                </label>
+                <label>
+                  Dia do vencimento
+                  <input
+                    required
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={billForm.due_day}
+                    onChange={(e) => setBillForm((p) => ({ ...p, due_day: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Começa em
+                  <input
+                    required
+                    type="month"
+                    value={billForm.start_month}
+                    onChange={(e) => setBillForm((p) => ({ ...p, start_month: e.target.value }))}
+                  />
+                </label>
+                {billForm.recurrence === 'until' ? (
+                  <label>
+                    Termina em
+                    <input
+                      required
+                      type="month"
+                      value={billForm.end_month}
+                      onChange={(e) => setBillForm((p) => ({ ...p, end_month: e.target.value }))}
+                    />
+                  </label>
+                ) : null}
+                <label>
+                  Categoria
+                  <select
+                    required
+                    value={billForm.category_id || ''}
+                    onChange={(e) => setBillForm((p) => ({ ...p, category_id: Number(e.target.value) }))}
+                  >
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Quem paga
+                  <div className="check-list">
+                    {members.length === 0 ? (
+                      <span className="meta">Cadastre a família primeiro.</span>
+                    ) : (
+                      members.map((member) => {
+                        const checked = billForm.member_ids.includes(member.id)
+                        return (
+                          <label key={member.id} className="check-item">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setBillForm((prev) => ({
+                                  ...prev,
+                                  member_ids: checked
+                                    ? prev.member_ids.filter((id) => id !== member.id)
+                                    : [...prev.member_ids, member.id],
+                                }))
+                              }}
+                            />
+                            <span>{member.name}</span>
+                          </label>
+                        )
+                      })
+                    )}
+                  </div>
+                </label>
+                <label>
+                  Observação
+                  <input
+                    value={billForm.notes}
+                    onChange={(e) => setBillForm((p) => ({ ...p, notes: e.target.value }))}
+                    placeholder="Opcional"
                   />
                 </label>
                 <button className="primary" type="submit">

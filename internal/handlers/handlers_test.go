@@ -20,9 +20,11 @@ type memoryStore struct {
 	categories   map[int]models.Category
 	transactions map[int]models.Transaction
 	members      map[int]models.Member
+	bills        map[int]models.Bill
 	nextCatID    int
 	nextTxID     int
 	nextMemberID int
+	nextBillID   int
 }
 
 func newMemoryStore() *memoryStore {
@@ -30,9 +32,11 @@ func newMemoryStore() *memoryStore {
 		categories:   make(map[int]models.Category),
 		transactions: make(map[int]models.Transaction),
 		members:      make(map[int]models.Member),
+		bills:        make(map[int]models.Bill),
 		nextCatID:    1,
 		nextTxID:     1,
 		nextMemberID: 1,
+		nextBillID:   1,
 	}
 }
 
@@ -232,6 +236,74 @@ func (m *memoryStore) DeleteTransaction(_ context.Context, id int) error {
 	return nil
 }
 
+func (m *memoryStore) CreateBill(_ context.Context, bill models.Bill) (models.Bill, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bill.ID = m.nextBillID
+	bill.CreatedAt = time.Now().UTC()
+	if bill.MemberIDs == nil {
+		bill.MemberIDs = []int{}
+	}
+	m.nextBillID++
+	m.bills[bill.ID] = bill
+	return bill, nil
+}
+
+func (m *memoryStore) ListBills(_ context.Context) ([]models.Bill, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.Bill, 0, len(m.bills))
+	for _, bill := range m.bills {
+		out = append(out, bill)
+	}
+	return out, nil
+}
+
+func (m *memoryStore) ListBillsActiveInMonth(_ context.Context, year, month int) ([]models.Bill, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.Bill, 0)
+	for _, bill := range m.bills {
+		if bill.IsActiveInMonth(year, month) {
+			out = append(out, bill)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryStore) GetBillByID(_ context.Context, id int) (models.Bill, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bill, ok := m.bills[id]
+	if !ok {
+		return models.Bill{}, repository.ErrNotFound
+	}
+	return bill, nil
+}
+
+func (m *memoryStore) UpdateBill(_ context.Context, id int, bill models.Bill) (models.Bill, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.bills[id]
+	if !ok {
+		return models.Bill{}, repository.ErrNotFound
+	}
+	bill.ID = id
+	bill.CreatedAt = existing.CreatedAt
+	m.bills[id] = bill
+	return bill, nil
+}
+
+func (m *memoryStore) DeleteBill(_ context.Context, id int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.bills[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(m.bills, id)
+	return nil
+}
+
 func TestHealth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -295,12 +367,24 @@ func TestMembersAndForecast(t *testing.T) {
 	}
 
 	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Mercado", Icon: "market"})
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})
+	memberID := 1
 	_, _ = store.CreateTransaction(context.Background(), models.Transaction{
 		CategoryID:  1,
+		MemberID:    &memberID,
 		Type:        models.TransactionTypeExpense,
 		Description: "Feira",
 		Amount:      200,
 		Date:        time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
+	})
+	_, _ = store.CreateBill(context.Background(), models.Bill{
+		Name:       "Internet",
+		Amount:     100,
+		CategoryID: 2,
+		DueDay:     10,
+		Recurrence: models.BillRecurrenceOngoing,
+		StartMonth: "2026-01",
+		MemberIDs:  []int{memberID},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/forecast/monthly?year=2026&month=8", nil)
@@ -317,7 +401,78 @@ func TestMembersAndForecast(t *testing.T) {
 	if body.PlannedSalary != 5000 {
 		t.Fatalf("planned_salary = %v, want 5000", body.PlannedSalary)
 	}
-	if body.TotalExpense != 200 {
-		t.Fatalf("total_expense = %v, want 200", body.TotalExpense)
+	if body.PlannedBills != 100 {
+		t.Fatalf("planned_bills = %v, want 100", body.PlannedBills)
+	}
+	if body.TotalExpense != 300 {
+		t.Fatalf("total_expense = %v, want 300", body.TotalExpense)
+	}
+	if len(body.ByMember) != 1 {
+		t.Fatalf("by_member len = %d, want 1", len(body.ByMember))
+	}
+	mf := body.ByMember[0]
+	if mf.BillShare != 100 {
+		t.Fatalf("bill_share = %v, want 100", mf.BillShare)
+	}
+	if mf.VariableExpense != 200 {
+		t.Fatalf("variable_expense = %v, want 200", mf.VariableExpense)
+	}
+	if mf.TotalToPay != 300 {
+		t.Fatalf("total_to_pay = %v, want 300", mf.TotalToPay)
+	}
+	if mf.Remaining != 4700 {
+		t.Fatalf("remaining = %v, want 4700", mf.Remaining)
+	}
+}
+
+func TestCreateOngoingAndUntilBills(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})
+	h := &handlers.Bills{Store: store, Categories: store, Members: store}
+
+	ongoingReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
+		`{"name":"Luz","amount":180,"category_id":1,"due_day":15,"recurrence":"ongoing","start_month":"2026-01","member_ids":[]}`,
+	))
+	ongoingRec := httptest.NewRecorder()
+	h.ListOrCreate(ongoingRec, ongoingReq)
+	if ongoingRec.Code != http.StatusCreated {
+		t.Fatalf("ongoing status = %d body=%s", ongoingRec.Code, ongoingRec.Body.String())
+	}
+
+	untilReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
+		`{"name":"Netflix","amount":55,"category_id":1,"due_day":5,"recurrence":"until","start_month":"2026-01","end_month":"2026-12","member_ids":[]}`,
+	))
+	untilRec := httptest.NewRecorder()
+	h.ListOrCreate(untilRec, untilReq)
+	if untilRec.Code != http.StatusCreated {
+		t.Fatalf("until status = %d body=%s", untilRec.Code, untilRec.Body.String())
+	}
+
+	missingEnd := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
+		`{"name":"Spotify","amount":30,"category_id":1,"due_day":5,"recurrence":"until","start_month":"2026-01","member_ids":[]}`,
+	))
+	missingRec := httptest.NewRecorder()
+	h.ListOrCreate(missingRec, missingEnd)
+	if missingRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing end status = %d, want 400", missingRec.Code)
+	}
+
+	// Create two members and attach both to one bill.
+	_, _ = store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana", MonthlySalary: 3000})
+	_, _ = store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Bruno", MonthlySalary: 4000})
+	sharedReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
+		`{"name":"Internet","amount":120,"category_id":1,"due_day":8,"recurrence":"ongoing","start_month":"2026-01","member_ids":[1,2]}`,
+	))
+	sharedRec := httptest.NewRecorder()
+	h.ListOrCreate(sharedRec, sharedReq)
+	if sharedRec.Code != http.StatusCreated {
+		t.Fatalf("shared status = %d body=%s", sharedRec.Code, sharedRec.Body.String())
+	}
+	var shared models.Bill
+	if err := json.NewDecoder(sharedRec.Body).Decode(&shared); err != nil {
+		t.Fatal(err)
+	}
+	if len(shared.MemberIDs) != 2 {
+		t.Fatalf("member_ids len = %d, want 2", len(shared.MemberIDs))
 	}
 }

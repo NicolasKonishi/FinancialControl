@@ -11,8 +11,9 @@ import (
 
 // ForecastStore provides data needed to compute a monthly forecast.
 type ForecastStore interface {
-	SumMonthlySalaries(ctx context.Context) (float64, error)
+	ListMembers(ctx context.Context) ([]models.Member, error)
 	ListTransactionsByMonth(ctx context.Context, year, month int) ([]models.Transaction, error)
+	ListBillsActiveInMonth(ctx context.Context, year, month int) ([]models.Bill, error)
 }
 
 // Forecast handles budget forecast endpoints.
@@ -27,7 +28,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plannedSalary, err := h.Store.SumMonthlySalaries(r.Context())
+	members, err := h.Store.ListMembers(r.Context())
 	if err != nil {
 		writeStoreError(w, err, "not found")
 		return
@@ -39,14 +40,26 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var extraIncome, totalExpense float64
+	bills, err := h.Store.ListBillsActiveInMonth(r.Context(), year, month)
+	if err != nil {
+		writeStoreError(w, err, "not found")
+		return
+	}
+
+	var plannedSalary, extraIncome, variableExpense, plannedBills float64
+	for _, member := range members {
+		plannedSalary += member.MonthlySalary
+	}
 	for _, tx := range transactions {
 		switch tx.Type {
 		case models.TransactionTypeIncome:
 			extraIncome += tx.Amount
 		case models.TransactionTypeExpense:
-			totalExpense += tx.Amount
+			variableExpense += tx.Amount
 		}
+	}
+	for _, bill := range bills {
+		plannedBills += bill.Amount
 	}
 
 	now := time.Now().UTC()
@@ -68,12 +81,14 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalAvailable := plannedSalary + extraIncome
+	totalExpense := variableExpense + plannedBills
 	remaining := totalAvailable - totalExpense
 
-	projectedExpense := totalExpense
+	projectedVariable := variableExpense
 	if daysElapsed > 0 {
-		projectedExpense = (totalExpense / float64(daysElapsed)) * float64(daysInMonth)
+		projectedVariable = (variableExpense / float64(daysElapsed)) * float64(daysInMonth)
 	}
+	projectedExpense := projectedVariable + plannedBills
 
 	safeDaily := 0.0
 	if daysRemaining > 0 {
@@ -94,6 +109,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		PlannedSalary:    round2(plannedSalary),
 		ExtraIncome:      round2(extraIncome),
 		TotalAvailable:   round2(totalAvailable),
+		PlannedBills:     round2(plannedBills),
 		TotalExpense:     round2(totalExpense),
 		Remaining:        round2(remaining),
 		DaysInMonth:      daysInMonth,
@@ -102,7 +118,67 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		ProjectedExpense: round2(projectedExpense),
 		SafeDailySpend:   round2(safeDaily),
 		ExpensePaceRatio: round2(pace),
+		ByMember:         buildMemberForecasts(members, transactions, bills),
 	})
+}
+
+func buildMemberForecasts(
+	members []models.Member,
+	transactions []models.Transaction,
+	bills []models.Bill,
+) []models.MemberForecast {
+	out := make([]models.MemberForecast, 0, len(members))
+	for _, member := range members {
+		var extraIncome, variableExpense, billShare float64
+		for _, tx := range transactions {
+			if tx.MemberID == nil || *tx.MemberID != member.ID {
+				continue
+			}
+			switch tx.Type {
+			case models.TransactionTypeIncome:
+				extraIncome += tx.Amount
+			case models.TransactionTypeExpense:
+				variableExpense += tx.Amount
+			}
+		}
+		for _, bill := range bills {
+			share := billShareForMember(bill, member.ID)
+			billShare += share
+		}
+
+		available := member.MonthlySalary + extraIncome
+		toPay := billShare + variableExpense
+		out = append(out, models.MemberForecast{
+			MemberID:        member.ID,
+			MemberName:      member.Name,
+			PlannedSalary:   round2(member.MonthlySalary),
+			ExtraIncome:     round2(extraIncome),
+			TotalAvailable:  round2(available),
+			BillShare:       round2(billShare),
+			VariableExpense: round2(variableExpense),
+			TotalToPay:      round2(toPay),
+			Remaining:       round2(available - toPay),
+		})
+	}
+	return out
+}
+
+// billShareForMember splits a bill equally across its payers.
+func billShareForMember(bill models.Bill, memberID int) float64 {
+	if len(bill.MemberIDs) == 0 {
+		return 0
+	}
+	found := false
+	for _, id := range bill.MemberIDs {
+		if id == memberID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0
+	}
+	return bill.Amount / float64(len(bill.MemberIDs))
 }
 
 func daysIn(year, month int) int {

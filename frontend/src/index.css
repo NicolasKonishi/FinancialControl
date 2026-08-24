@@ -152,6 +152,31 @@ select {
   color: var(--muted);
 }
 
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.85rem;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  box-shadow: var(--shadow);
+}
+
+.chip.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+  font-weight: 650;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -369,6 +394,28 @@ label {
   font-size: 0.82rem;
 }
 
+.check-list {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--input-bg);
+}
+
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.check-item input {
+  width: auto;
+  accent-color: var(--accent);
+}
+
 input,
 select {
   width: 100%;
@@ -405,7 +452,7 @@ select {
   width: min(560px, 100%);
   height: var(--nav-h);
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   background: var(--nav-bg);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
