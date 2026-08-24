@@ -1,0 +1,470 @@
+:root {
+  --bg: #f3f1ec;
+  --surface: #fffcf7;
+  --ink: #1c1a17;
+  --muted: #6f6a63;
+  --line: rgba(28, 26, 23, 0.1);
+  --income: #1f6b45;
+  --expense: #a33b2d;
+  --accent: #1c1a17;
+  --on-accent: #fffcf7;
+  --ok: #1f6b45;
+  --warn: #9a6b1f;
+  --danger: #a33b2d;
+  --soft: rgba(28, 26, 23, 0.04);
+  --soft-strong: rgba(28, 26, 23, 0.08);
+  --input-bg: #ffffff;
+  --nav-bg: rgba(255, 252, 247, 0.94);
+  --overlay: rgba(28, 26, 23, 0.35);
+  --danger-soft: rgba(163, 59, 45, 0.08);
+  --danger-line: rgba(163, 59, 45, 0.25);
+  --shadow: 0 10px 30px rgba(28, 26, 23, 0.06);
+  --radius: 16px;
+  --nav-h: 68px;
+  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --display: "IBM Plex Serif", Georgia, serif;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --bg: #12141a;
+  --surface: #1a1d26;
+  --ink: #e8e6e1;
+  --muted: #9a968e;
+  --line: rgba(232, 230, 225, 0.12);
+  --income: #5dba86;
+  --expense: #e07a6a;
+  --accent: #e8e6e1;
+  --on-accent: #12141a;
+  --ok: #5dba86;
+  --warn: #d4a84b;
+  --danger: #e07a6a;
+  --soft: rgba(232, 230, 225, 0.05);
+  --soft-strong: rgba(232, 230, 225, 0.1);
+  --input-bg: #12141a;
+  --nav-bg: rgba(18, 20, 26, 0.94);
+  --overlay: rgba(0, 0, 0, 0.55);
+  --danger-soft: rgba(224, 122, 106, 0.12);
+  --danger-line: rgba(224, 122, 106, 0.3);
+  --shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.app {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  min-height: 100dvh;
+  padding: 1rem 1rem calc(var(--nav-h) + 1.25rem);
+}
+
+.top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.top h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.7rem;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+}
+
+.top p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.top-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.45rem;
+}
+
+.theme-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow);
+}
+
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.month-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.month-switch button {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.month-switch span {
+  min-width: 7.5rem;
+  text-align: center;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hero-value {
+  font-family: var(--display);
+  font-size: clamp(1.8rem, 7vw, 2.35rem);
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+.hero-value.neg {
+  color: var(--expense);
+}
+
+.hero-value.pos {
+  color: var(--income);
+}
+
+.meta {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+  margin-top: 0.9rem;
+}
+
+.metric {
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: var(--soft);
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-bottom: 0.25rem;
+}
+
+.metric strong {
+  font-size: 1.02rem;
+}
+
+.progress {
+  margin-top: 0.95rem;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--soft-strong);
+  overflow: hidden;
+}
+
+.progress > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+
+.progress.warn > i {
+  background: var(--warn);
+}
+
+.progress.danger > i {
+  background: var(--danger);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.55rem;
+  margin-bottom: 0.85rem;
+}
+
+.actions button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 14px;
+  padding: 0.85rem 0.4rem;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.actions button strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.actions button span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.glyph {
+  width: 20px;
+  height: 20px;
+}
+
+.row h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.row p {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.amount {
+  font-weight: 650;
+  font-size: 0.95rem;
+  text-align: right;
+}
+
+.amount.income {
+  color: var(--income);
+}
+
+.amount.expense {
+  color: var(--expense);
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}
+
+.row-actions button,
+.ghost,
+.danger,
+.primary {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+  width: 100%;
+  padding: 0.85rem 1rem;
+  margin-top: 0.35rem;
+}
+
+.danger {
+  color: var(--expense);
+  border-color: var(--danger-line);
+}
+
+.form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+input,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+  border-radius: 12px;
+  padding: 0.75rem 0.8rem;
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.empty,
+.error {
+  padding: 0.85rem;
+  border-radius: 12px;
+  margin-bottom: 0.85rem;
+}
+
+.empty {
+  color: var(--muted);
+  background: var(--soft);
+}
+
+.error {
+  color: var(--expense);
+  background: var(--danger-soft);
+}
+
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 0;
+  width: min(560px, 100%);
+  height: var(--nav-h);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--nav-bg);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bottom-nav button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  display: grid;
+  place-items: center;
+  gap: 0.15rem;
+}
+
+.bottom-nav button.active {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: grid;
+  align-items: end;
+  z-index: 20;
+  padding: 0.75rem;
+}
+
+.sheet-panel {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  background: var(--surface);
+  border-radius: 18px 18px 14px 14px;
+  padding: 1rem;
+  max-height: 88dvh;
+  overflow: auto;
+  border: 1px solid var(--line);
+}
+
+.sheet-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.sheet-panel h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.25rem;
+  color: var(--ink);
+}
+
+@media (min-width: 720px) {
+  .app {
+    padding-top: 1.5rem;
+  }
+}
