@@ -21,8 +21,8 @@
   --shadow: 0 10px 30px rgba(28, 26, 23, 0.06);
   --radius: 16px;
   --nav-h: 68px;
-  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --display: "IBM Plex Serif", Georgia, serif;
+  --font: "Montserrat", sans-serif;
+  --display: "Montserrat", sans-serif;
   color-scheme: light;
 }
 
@@ -545,6 +545,16 @@ select {
   cursor: not-allowed;
 }
 
+.home-dash {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 0.85rem;
+}
+
+.home-dash > .card {
+  margin-bottom: 0;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -702,6 +712,23 @@ select {
   font-size: 0.8rem;
 }
 
+.row-main {
+  min-width: 0;
+}
+
+.row-main h3,
+.row-main p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-side {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: end;
+  align-content: center;
+}
+
 .amount {
   font-weight: 650;
   font-size: 0.95rem;
@@ -719,8 +746,8 @@ select {
 .row-actions {
   display: flex;
   gap: 0.35rem;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: 0.25rem;
 }
 
 .row-actions button,
@@ -736,13 +763,76 @@ select {
   font-size: 0.82rem;
 }
 
+.icon-btn {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  border-color: var(--ink);
+}
+
+.icon-btn.danger {
+  padding : 0;
+  color: var(--expense);
+  border-color: var(--danger-line);
+}
+
+.icon-btn.danger:hover {
+  background: rgba(220, 80, 80, 0.1);
+}
+
+.action-glyph {
+  height: 1rem;
+  display: block;
+}
+
+.confirm-panel {
+  max-width: 22rem;
+}
+
+.confirm-message {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.confirm-actions .confirm-cancel {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+}
+
+.confirm-actions .confirm-danger {
+  width: 100%;
+  margin-top: 0;
+  background: var(--expense);
+  border-color: var(--expense);
+  color: #fff;
+}
+
 .primary {
   background: var(--accent);
   color: var(--on-accent);
   border-color: var(--accent);
   width: 100%;
   padding: 0.85rem 1rem;
-  margin-top: 0.35rem;
+  margin-top: 0.5rem;
 }
 
 .danger {
@@ -926,8 +1016,149 @@ select {
   }
 }
 
-@media (min-width: 720px) {
+@media (min-width: 900px) {
   .app {
-    padding-top: 1.5rem;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 15.5rem minmax(0, 1fr);
+    min-height: 100dvh;
+  }
+
+  .app-main {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 100dvh;
+    padding: 1.5rem 2rem 2rem;
+  }
+
+  .bottom-nav {
+    position: sticky;
+    top: 0;
+    left: auto;
+    transform: none;
+    align-self: start;
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 0.3rem;
+    padding: 1.4rem 0.85rem 1.25rem;
+    border-top: 0;
+    border-right: 1px solid var(--line);
+    background: var(--surface);
+    backdrop-filter: none;
+  }
+
+  .bottom-nav button {
+    font-size: 0.92rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.55rem;
+    padding: 0.72rem 0.9rem;
+    border-radius: 12px;
+    text-align: left;
+  }
+
+  .bottom-nav button.active {
+    background: var(--soft-strong);
+  }
+
+  .top {
+    align-items: center;
+    margin-bottom: 1.15rem;
+  }
+
+  .top h1 {
+    font-size: 2rem;
+  }
+
+  .top-controls {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.65rem;
+  }
+
+  .hero-value {
+    font-size: 2.5rem;
+  }
+
+  .card {
+    padding: 1.15rem 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .card > .primary {
+    width: auto;
+    min-width: 12rem;
+  }
+
+  .actions {
+    max-width: 36rem;
+  }
+
+  .sheet {
+    align-items: center;
+    justify-items: center;
+    padding: 2rem;
+  }
+
+  .sheet-panel {
+    width: min(32rem, 100%);
+    border-radius: 18px;
+    max-height: 86dvh;
+  }
+
+  .sheet-panel:has(.bill-form) {
+    width: min(46rem, 100%);
+  }
+}
+
+@media (min-width: 1100px) {
+  .home-dash {
+    margin-bottom: 1rem;
+    gap: 1rem;
+  }
+
+  .home-dash:has(> :nth-child(2)) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    align-items: stretch;
+  }
+
+  .home-dash:has(> :nth-child(2)) > .card {
+    height: 100%;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .home-dash .metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 1280px) {
+  .app {
+    grid-template-columns: 16.5rem minmax(0, 1fr);
+  }
+
+  .app-main {
+    padding: 1.75rem 2.5rem 2.5rem;
+  }
+
+  .card > .list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .home-dash .card > .list {
+    grid-template-columns: 1fr;
   }
 }

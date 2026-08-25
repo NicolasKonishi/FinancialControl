@@ -242,3 +242,35 @@ export function CategoryGlyph({ icon, className = '' }: { icon: CategoryIcon | s
       )
   }
 }
+
+const actionIconProps = {
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.8,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  className: 'action-glyph',
+  'aria-hidden': true,
+}
+
+export function PencilIcon() {
+  return (
+    <svg {...actionIconProps}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5Z" />
+    </svg>
+  )
+}
+
+export function TrashIcon() {
+  return (
+    <svg {...actionIconProps}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  )
+}

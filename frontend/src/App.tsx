@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from './api'
-import { CATEGORY_ICONS, CategoryGlyph, iconLabel } from './icons'
+import { CATEGORY_ICONS, CategoryGlyph, iconLabel, PencilIcon, TrashIcon } from './icons'
 import { applyTheme, getPreferredTheme, persistTheme, type Theme } from './theme'
 import { BillEndMonthPicker } from './BillEndMonthPicker'
 import { BillSchedulePicker } from './BillSchedulePicker'
@@ -67,6 +67,11 @@ export default function App() {
   const [memberFilter, setMemberFilter] = useState<number | 'all'>('all')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [confirmDelete, setConfirmDelete] = useState<{
+    title: string
+    message: string
+    onConfirm: () => Promise<void>
+  } | null>(null)
 
   const [sheet, setSheet] = useState<SheetMode>(null)
   const [editingTxId, setEditingTxId] = useState<number | null>(null)
@@ -166,6 +171,28 @@ export default function App() {
     } finally {
       setLoading(false)
     }
+  }
+
+  function askDelete(title: string, message: string, action: () => Promise<void>) {
+    setConfirmDelete({
+      title,
+      message,
+      onConfirm: async () => {
+        try {
+          await action()
+          setConfirmDelete(null)
+          await refresh()
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Erro ao excluir'
+          setError(
+            msg.includes('FOREIGN KEY') || msg.includes('constraint')
+              ? 'Não é possível excluir: item ainda está em uso.'
+              : msg,
+          )
+          setConfirmDelete(null)
+        }
+      },
+    })
   }
 
   useEffect(() => {
@@ -378,6 +405,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="app-main">
       <header className="top">
         <div>
           <h1>Fluxo</h1>
@@ -465,71 +493,72 @@ export default function App() {
         </section>
       )}
 
-      {memberFilter === 'all' && (forecast?.by_member?.length ?? 0) > 0 && view === 'home' && (
-        <section className="card">
-          <h2>Por pessoa</h2>
-          <p className="meta" style={{ marginBottom: '0.85rem' }}>
-            Quanto cada um paga e quanto sobra no mês.
-          </p>
-          <div className="list">
-            {(forecast?.by_member ?? []).map((item) => (
-              <article key={item.member_id} className="row">
-                <div className="icon-wrap">
-                  <CategoryGlyph icon="salary" />
-                </div>
-                <div>
-                  <h3>{item.member_name}</h3>
-                  <p>
-                    pagar {currency.format(item.total_to_pay)} · contas{' '}
-                    {currency.format(item.bill_share)}
-                  </p>
-                </div>
-                <div className={`amount ${item.remaining < 0 ? 'expense' : 'income'}`}>
-                  {currency.format(item.remaining)}
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
       {view === 'home' && (
         <>
           {memberFilter === 'all' && (
-            <section className="card">
-              <h2>Previsão do mês</h2>
-              <p className={`hero-value ${(forecast?.remaining ?? 0) < 0 ? 'neg' : 'pos'}`}>
-                {currency.format(forecast?.remaining ?? 0)}
-              </p>
-              <p className="meta">
-                sobrando de {currency.format(forecast?.total_available ?? 0)} disponíveis
-              </p>
-              <div className="metrics">
-                <div className="metric">
-                  <span>Salários planejados</span>
-                  <strong>{currency.format(forecast?.planned_salary ?? 0)}</strong>
+            <div className="home-dash">
+              {(forecast?.by_member?.length ?? 0) > 0 && (
+                <section className="card">
+                  <h2>Por pessoa</h2>
+                  <p className="meta" style={{ marginBottom: '0.85rem' }}>
+                    Quanto cada um paga e quanto sobra no mês.
+                  </p>
+                  <div className="list">
+                    {(forecast?.by_member ?? []).map((item) => (
+                      <article key={item.member_id} className="row">
+                        <div className="icon-wrap">
+                          <CategoryGlyph icon="salary" />
+                        </div>
+                        <div>
+                          <h3>{item.member_name}</h3>
+                          <p>
+                            pagar {currency.format(item.total_to_pay)} · contas{' '}
+                            {currency.format(item.bill_share)}
+                          </p>
+                        </div>
+                        <div className={`amount ${item.remaining < 0 ? 'expense' : 'income'}`}>
+                          {currency.format(item.remaining)}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+              <section className="card">
+                <h2>Previsão do mês</h2>
+                <p className={`hero-value ${(forecast?.remaining ?? 0) < 0 ? 'neg' : 'pos'}`}>
+                  {currency.format(forecast?.remaining ?? 0)}
+                </p>
+                <p className="meta">
+                  sobrando de {currency.format(forecast?.total_available ?? 0)} disponíveis
+                </p>
+                <div className="metrics">
+                  <div className="metric">
+                    <span>Salários planejados</span>
+                    <strong>{currency.format(forecast?.planned_salary ?? 0)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>Extras / freelancer</span>
+                    <strong>{currency.format(forecast?.extra_income ?? 0)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>Contas do mês</span>
+                    <strong>{currency.format(forecast?.planned_bills ?? 0)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>Total comprometido</span>
+                    <strong>{currency.format(forecast?.total_expense ?? 0)}</strong>
+                  </div>
                 </div>
-                <div className="metric">
-                  <span>Extras / freelancer</span>
-                  <strong>{currency.format(forecast?.extra_income ?? 0)}</strong>
+                <div className={`progress ${paceClass}`} title="Ritmo de gasto projetado">
+                  <i style={{ width: `${usedRatio * 100}%` }} />
                 </div>
-                <div className="metric">
-                  <span>Contas do mês</span>
-                  <strong>{currency.format(forecast?.planned_bills ?? 0)}</strong>
-                </div>
-                <div className="metric">
-                  <span>Total comprometido</span>
-                  <strong>{currency.format(forecast?.total_expense ?? 0)}</strong>
-                </div>
-              </div>
-              <div className={`progress ${paceClass}`} title="Ritmo de gasto projetado">
-                <i style={{ width: `${usedRatio * 100}%` }} />
-              </div>
-              <p className="meta">
-                Pode gastar cerca de {currency.format(forecast?.safe_daily_spend ?? 0)} por dia nos próximos{' '}
-                {forecast?.days_remaining ?? 0} dias.
-              </p>
-            </section>
+                <p className="meta">
+                  Pode gastar cerca de {currency.format(forecast?.safe_daily_spend ?? 0)} por dia nos próximos{' '}
+                  {forecast?.days_remaining ?? 0} dias.
+                </p>
+              </section>
+            </div>
           )}
 
           <div className="actions">
@@ -599,16 +628,20 @@ export default function App() {
                     <div className="icon-wrap">
                       <CategoryGlyph icon={cat?.icon ?? 'other'} />
                     </div>
-                    <div>
+                    <div className="row-main">
                       <h3>{tx.description}</h3>
                       <p>
                         {cat?.name ?? 'Categoria'}
                         {member ? ` · ${member.name}` : ''} · {formatDate(tx.date)}
                       </p>
+                    </div>
+                    <div className="row-side">
                       <div className="row-actions">
                         <button
                           type="button"
-                          className="ghost"
+                          className="icon-btn"
+                          aria-label="Editar lançamento"
+                          title="Editar"
                           onClick={() => {
                             setEditingTxId(tx.id)
                             setTxForm({
@@ -625,29 +658,28 @@ export default function App() {
                             setSheet(tx.type === 'expense' ? 'expense' : 'income')
                           }}
                         >
-                          Editar
+                          <PencilIcon />
                         </button>
                         <button
                           type="button"
-                          className="danger"
-                          onClick={() => {
-                            void (async () => {
-                              try {
-                                await api.deleteTransaction(tx.id)
-                                await refresh()
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : 'Erro ao excluir')
-                              }
-                            })()
-                          }}
+                          className="icon-btn danger"
+                          aria-label="Excluir lançamento"
+                          title="Excluir"
+                          onClick={() =>
+                            askDelete(
+                              'Excluir lançamento?',
+                              `Tem certeza que deseja excluir “${tx.description}”? Essa ação não pode ser desfeita.`,
+                              () => api.deleteTransaction(tx.id),
+                            )
+                          }
                         >
-                          Excluir
+                          <TrashIcon />
                         </button>
                       </div>
-                    </div>
-                    <div className={`amount ${tx.type}`}>
-                      {tx.type === 'expense' ? '−' : '+'}
-                      {currency.format(tx.amount)}
+                      <div className={`amount ${tx.type}`}>
+                        {tx.type === 'expense' ? '−' : '+'}
+                        {currency.format(tx.amount)}
+                      </div>
                     </div>
                   </article>
                 )
@@ -684,7 +716,7 @@ export default function App() {
                     <div className="icon-wrap">
                       <CategoryGlyph icon={cat?.icon ?? 'home'} />
                     </div>
-                    <div>
+                    <div className="row-main">
                       <h3>{bill.name}</h3>
                       <p>
                         {currency.format(monthAmount)} ·{' '}
@@ -697,10 +729,14 @@ export default function App() {
                           : `até ${bill.end_month}`}
                         {payers ? ` · ${payers}` : ' · sem responsáveis'}
                       </p>
+                    </div>
+                    <div className="row-side">
                       <div className="row-actions">
                         <button
                           type="button"
-                          className="ghost"
+                          className="icon-btn"
+                          aria-label="Editar conta"
+                          title="Editar"
                           onClick={() => {
                             setEditingBillId(bill.id)
                             setBillForm({
@@ -722,27 +758,26 @@ export default function App() {
                             setSheet('bill')
                           }}
                         >
-                          Editar
+                          <PencilIcon />
                         </button>
                         <button
                           type="button"
-                          className="danger"
-                          onClick={() => {
-                            void (async () => {
-                              try {
-                                await api.deleteBill(bill.id)
-                                await refresh()
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : 'Erro ao excluir')
-                              }
-                            })()
-                          }}
+                          className="icon-btn danger"
+                          aria-label="Excluir conta"
+                          title="Excluir"
+                          onClick={() =>
+                            askDelete(
+                              'Excluir conta?',
+                              `Tem certeza que deseja excluir “${bill.name}”? Essa ação não pode ser desfeita.`,
+                              () => api.deleteBill(bill.id),
+                            )
+                          }
                         >
-                          Excluir
+                          <TrashIcon />
                         </button>
                       </div>
+                      <div className="amount expense">{currency.format(monthAmount)}</div>
                     </div>
-                    <div className="amount expense">{currency.format(monthAmount)}</div>
                   </article>
                 )
               })}
@@ -769,13 +804,17 @@ export default function App() {
                   <div className="icon-wrap">
                     <CategoryGlyph icon="salary" />
                   </div>
-                  <div>
+                  <div className="row-main">
                     <h3>{member.name}</h3>
                     <p>Salário mensal</p>
+                  </div>
+                  <div className="row-side">
                     <div className="row-actions">
                       <button
                         type="button"
-                        className="ghost"
+                        className="icon-btn"
+                        aria-label="Editar pessoa"
+                        title="Editar"
                         onClick={() => {
                           setEditingMemberId(member.id)
                           setMemberForm({
@@ -785,27 +824,26 @@ export default function App() {
                           setSheet('member')
                         }}
                       >
-                        Editar
+                        <PencilIcon />
                       </button>
                       <button
                         type="button"
-                        className="danger"
-                        onClick={() => {
-                          void (async () => {
-                            try {
-                              await api.deleteMember(member.id)
-                              await refresh()
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : 'Erro ao excluir')
-                            }
-                          })()
-                        }}
+                        className="icon-btn danger"
+                        aria-label="Excluir pessoa"
+                        title="Excluir"
+                        onClick={() =>
+                          askDelete(
+                            'Excluir pessoa?',
+                            `Tem certeza que deseja excluir “${member.name}” da família? Essa ação não pode ser desfeita.`,
+                            () => api.deleteMember(member.id),
+                          )
+                        }
                       >
-                        Excluir
+                        <TrashIcon />
                       </button>
                     </div>
+                    <div className="amount income">{currency.format(member.monthly_salary)}</div>
                   </div>
-                  <div className="amount income">{currency.format(member.monthly_salary)}</div>
                 </article>
               ))}
             </div>
@@ -831,50 +869,46 @@ export default function App() {
                   <div className="icon-wrap">
                     <CategoryGlyph icon={cat.icon} />
                   </div>
-                  <div>
+                  <div className="row-main">
                     <h3>{cat.name}</h3>
                     <p>
                       {iconLabel(cat.icon)}
                       {cat.description ? ` · ${cat.description}` : ''}
                     </p>
-                    <div className="row-actions">
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => {
-                          setEditingCategoryId(cat.id)
-                          setCategoryForm({
-                            name: cat.name,
-                            description: cat.description ?? '',
-                            icon: (cat.icon as CategoryIcon) || 'other',
-                          })
-                          setSheet('category')
-                        }}
-                      >
-                        Editar
-                      </button>
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => {
-                          void (async () => {
-                            try {
-                              await api.deleteCategory(cat.id)
-                              await refresh()
-                            } catch (err) {
-                              const msg = err instanceof Error ? err.message : 'Erro ao excluir'
-                              setError(
-                                msg.includes('FOREIGN KEY') || msg.includes('constraint')
-                                  ? 'Categoria em uso em lançamentos ou contas.'
-                                  : msg,
-                              )
-                            }
-                          })()
-                        }}
-                      >
-                        Excluir
-                      </button>
-                    </div>
+                  </div>
+                  <div className="row-actions">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="Editar categoria"
+                      title="Editar"
+                      onClick={() => {
+                        setEditingCategoryId(cat.id)
+                        setCategoryForm({
+                          name: cat.name,
+                          description: cat.description ?? '',
+                          icon: (cat.icon as CategoryIcon) || 'other',
+                        })
+                        setSheet('category')
+                      }}
+                    >
+                      <PencilIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      aria-label="Excluir categoria"
+                      title="Excluir"
+                      onClick={() =>
+                        askDelete(
+                          'Excluir categoria?',
+                          `Tem certeza que deseja excluir “${cat.name}”? Essa ação não pode ser desfeita.`,
+                          () => api.deleteCategory(cat.id),
+                        )
+                      }
+                    >
+                      <TrashIcon />
+                    </button>
                   </div>
                 </article>
               ))}
@@ -885,6 +919,7 @@ export default function App() {
           </button>
         </section>
       )}
+      </div>
 
       <nav className="bottom-nav" aria-label="Navegação">
         <button type="button" className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}>
@@ -1276,6 +1311,39 @@ export default function App() {
           </div>
         </div>
       )}
+      {confirmDelete ? (
+        <div
+          className="sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-delete-title"
+          onClick={() => setConfirmDelete(null)}
+        >
+          <div className="sheet-panel confirm-panel" onClick={(e) => e.stopPropagation()}>
+            <header>
+              <h2 id="confirm-delete-title">{confirmDelete.title}</h2>
+              <button type="button" className="ghost" onClick={() => setConfirmDelete(null)}>
+                Fechar
+              </button>
+            </header>
+            <p className="confirm-message">{confirmDelete.message}</p>
+            <div className="confirm-actions">
+              <button type="button" className="ghost confirm-cancel" onClick={() => setConfirmDelete(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="primary confirm-danger"
+                onClick={() => {
+                  void confirmDelete.onConfirm()
+                }}
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
