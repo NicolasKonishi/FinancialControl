@@ -79,15 +79,18 @@ func (h *Bills) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bill, ok := h.buildFromInput(w, r, models.CreateBillInput{
-		Name:       input.Name,
-		Amount:     input.Amount,
-		CategoryID: input.CategoryID,
-		MemberIDs:  input.MemberIDs,
-		DueDay:     input.DueDay,
-		Recurrence: input.Recurrence,
-		StartMonth: input.StartMonth,
-		EndMonth:   input.EndMonth,
-		Notes:      input.Notes,
+		Name:         input.Name,
+		Amount:       input.Amount,
+		AmountMode:   input.AmountMode,
+		InterestRate: input.InterestRate,
+		CategoryID:   input.CategoryID,
+		MemberIDs:    input.MemberIDs,
+		DueDay:       input.DueDay,
+		Frequency:    input.Frequency,
+		Recurrence:   input.Recurrence,
+		StartMonth:   input.StartMonth,
+		EndMonth:     input.EndMonth,
+		Notes:        input.Notes,
 	})
 	if !ok {
 		return
@@ -119,12 +122,32 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return models.Bill{}, false
 	}
-	if input.Amount <= 0 {
+	if input.DueDay < 1 || input.DueDay > 31 {
+		http.Error(w, "due_day must be between 1 and 31", http.StatusBadRequest)
+		return models.Bill{}, false
+	}
+
+	amountMode := models.NormalizeAmountMode(strings.ToLower(strings.TrimSpace(input.AmountMode)))
+	interestRate := input.InterestRate
+
+	amount := input.Amount
+	if amountMode == models.BillAmountModeInterest {
+		if amount <= 0 {
+			http.Error(w, "amount must be greater than zero", http.StatusBadRequest)
+			return models.Bill{}, false
+		}
+		if interestRate < 0 {
+			http.Error(w, "interest_rate cannot be negative", http.StatusBadRequest)
+			return models.Bill{}, false
+		}
+	} else if amount <= 0 {
 		http.Error(w, "amount must be greater than zero", http.StatusBadRequest)
 		return models.Bill{}, false
 	}
-	if input.DueDay < 1 || input.DueDay > 31 {
-		http.Error(w, "due_day must be between 1 and 31", http.StatusBadRequest)
+
+	frequency := models.NormalizeFrequency(strings.ToLower(strings.TrimSpace(input.Frequency)))
+	if !models.ValidBillFrequency(frequency) {
+		http.Error(w, "frequency must be daily, weekdays, weekly, biweekly, monthly, or yearly", http.StatusBadRequest)
 		return models.Bill{}, false
 	}
 
@@ -182,15 +205,18 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 	}
 
 	return models.Bill{
-		Name:       strings.TrimSpace(input.Name),
-		Amount:     input.Amount,
-		CategoryID: input.CategoryID,
-		MemberIDs:  memberIDs,
-		DueDay:     input.DueDay,
-		Recurrence: recurrence,
-		StartMonth: input.StartMonth,
-		EndMonth:   normalizedEnd,
-		Notes:      strings.TrimSpace(input.Notes),
+		Name:         strings.TrimSpace(input.Name),
+		Amount:       amount,
+		AmountMode:   amountMode,
+		InterestRate: interestRate,
+		CategoryID:   input.CategoryID,
+		MemberIDs:    memberIDs,
+		DueDay:       input.DueDay,
+		Frequency:    frequency,
+		Recurrence:   recurrence,
+		StartMonth:   input.StartMonth,
+		EndMonth:     normalizedEnd,
+		Notes:        strings.TrimSpace(input.Notes),
 	}, true
 }
 

@@ -21,10 +21,10 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 
 	const query = `
 		INSERT INTO bills (
-			name, amount, category_id, member_id, due_day,
+			name, amount, amount_mode, interest_rate, category_id, member_id, due_day, frequency,
 			recurrence, start_month, end_month, notes, created_at
-		) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
-		RETURNING id, name, amount, category_id, due_day,
+		) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
 			recurrence, start_month, end_month, notes, created_at
 	`
 
@@ -39,8 +39,11 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 		query,
 		strings.TrimSpace(bill.Name),
 		bill.Amount,
+		models.NormalizeAmountMode(bill.AmountMode),
+		bill.InterestRate,
 		bill.CategoryID,
 		bill.DueDay,
+		models.NormalizeFrequency(bill.Frequency),
 		bill.Recurrence,
 		bill.StartMonth,
 		nullString(bill.EndMonth),
@@ -50,8 +53,11 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 		&created.ID,
 		&created.Name,
 		&created.Amount,
+		&created.AmountMode,
+		&created.InterestRate,
 		&created.CategoryID,
 		&created.DueDay,
+		&created.Frequency,
 		&created.Recurrence,
 		&created.StartMonth,
 		&endMonth,
@@ -85,7 +91,7 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 // ListBills returns all bills ordered by due_day, then name.
 func (s *Store) ListBills(ctx context.Context) ([]models.Bill, error) {
 	const query = `
-		SELECT id, name, amount, category_id, due_day,
+		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
 			recurrence, start_month, end_month, notes, created_at
 		FROM bills
 		ORDER BY due_day ASC, name ASC
@@ -111,7 +117,7 @@ func (s *Store) ListBillsActiveInMonth(ctx context.Context, year, month int) ([]
 // GetBillByID returns one bill or ErrNotFound.
 func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 	const query = `
-		SELECT id, name, amount, category_id, due_day,
+		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
 			recurrence, start_month, end_month, notes, created_at
 		FROM bills
 		WHERE id = ?
@@ -126,8 +132,11 @@ func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 		&bill.ID,
 		&bill.Name,
 		&bill.Amount,
+		&bill.AmountMode,
+		&bill.InterestRate,
 		&bill.CategoryID,
 		&bill.DueDay,
+		&bill.Frequency,
 		&bill.Recurrence,
 		&bill.StartMonth,
 		&endMonth,
@@ -168,10 +177,10 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 
 	const query = `
 		UPDATE bills
-		SET name = ?, amount = ?, category_id = ?, member_id = NULL, due_day = ?,
-			recurrence = ?, start_month = ?, end_month = ?, notes = ?
+		SET name = ?, amount = ?, amount_mode = ?, interest_rate = ?, category_id = ?, member_id = NULL, due_day = ?,
+			frequency = ?, recurrence = ?, start_month = ?, end_month = ?, notes = ?
 		WHERE id = ?
-		RETURNING id, name, amount, category_id, due_day,
+		RETURNING id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
 			recurrence, start_month, end_month, notes, created_at
 	`
 
@@ -185,8 +194,11 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 		query,
 		strings.TrimSpace(bill.Name),
 		bill.Amount,
+		models.NormalizeAmountMode(bill.AmountMode),
+		bill.InterestRate,
 		bill.CategoryID,
 		bill.DueDay,
+		models.NormalizeFrequency(bill.Frequency),
 		bill.Recurrence,
 		bill.StartMonth,
 		nullString(bill.EndMonth),
@@ -196,8 +208,11 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 		&updated.ID,
 		&updated.Name,
 		&updated.Amount,
+		&updated.AmountMode,
+		&updated.InterestRate,
 		&updated.CategoryID,
 		&updated.DueDay,
+		&updated.Frequency,
 		&updated.Recurrence,
 		&updated.StartMonth,
 		&endMonth,
@@ -267,8 +282,11 @@ func (s *Store) scanBills(ctx context.Context, query string, args ...any) ([]mod
 			&bill.ID,
 			&bill.Name,
 			&bill.Amount,
+			&bill.AmountMode,
+			&bill.InterestRate,
 			&bill.CategoryID,
 			&bill.DueDay,
+			&bill.Frequency,
 			&bill.Recurrence,
 			&bill.StartMonth,
 			&endMonth,

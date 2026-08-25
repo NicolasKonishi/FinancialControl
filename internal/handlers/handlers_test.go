@@ -382,6 +382,7 @@ func TestMembersAndForecast(t *testing.T) {
 		Amount:     100,
 		CategoryID: 2,
 		DueDay:     10,
+		Frequency:  models.BillFrequencyMonthly,
 		Recurrence: models.BillRecurrenceOngoing,
 		StartMonth: "2026-01",
 		MemberIDs:  []int{memberID},
@@ -431,16 +432,32 @@ func TestCreateOngoingAndUntilBills(t *testing.T) {
 	h := &handlers.Bills{Store: store, Categories: store, Members: store}
 
 	ongoingReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
-		`{"name":"Luz","amount":180,"category_id":1,"due_day":15,"recurrence":"ongoing","start_month":"2026-01","member_ids":[]}`,
+		`{"name":"Luz","amount":180,"category_id":1,"due_day":15,"frequency":"monthly","recurrence":"ongoing","start_month":"2026-01","member_ids":[]}`,
 	))
 	ongoingRec := httptest.NewRecorder()
 	h.ListOrCreate(ongoingRec, ongoingReq)
 	if ongoingRec.Code != http.StatusCreated {
 		t.Fatalf("ongoing status = %d body=%s", ongoingRec.Code, ongoingRec.Body.String())
 	}
+	var luz models.Bill
+	if err := json.NewDecoder(ongoingRec.Body).Decode(&luz); err != nil {
+		t.Fatal(err)
+	}
+	if luz.Frequency != models.BillFrequencyMonthly {
+		t.Fatalf("frequency = %q, want monthly", luz.Frequency)
+	}
+
+	weeklyReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
+		`{"name":"Feira","amount":50,"category_id":1,"due_day":5,"frequency":"weekly","recurrence":"ongoing","start_month":"2026-08","member_ids":[]}`,
+	))
+	weeklyRec := httptest.NewRecorder()
+	h.ListOrCreate(weeklyRec, weeklyReq)
+	if weeklyRec.Code != http.StatusCreated {
+		t.Fatalf("weekly status = %d body=%s", weeklyRec.Code, weeklyRec.Body.String())
+	}
 
 	untilReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
-		`{"name":"Netflix","amount":55,"category_id":1,"due_day":5,"recurrence":"until","start_month":"2026-01","end_month":"2026-12","member_ids":[]}`,
+		`{"name":"Netflix","amount":55,"category_id":1,"due_day":5,"frequency":"monthly","recurrence":"until","start_month":"2026-01","end_month":"2026-12","member_ids":[]}`,
 	))
 	untilRec := httptest.NewRecorder()
 	h.ListOrCreate(untilRec, untilReq)

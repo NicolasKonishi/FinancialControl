@@ -59,7 +59,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, bill := range bills {
-		plannedBills += bill.Amount
+		plannedBills += bill.ChargeForMonth(year, month)
 	}
 
 	now := time.Now().UTC()
@@ -118,7 +118,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		ProjectedExpense: round2(projectedExpense),
 		SafeDailySpend:   round2(safeDaily),
 		ExpensePaceRatio: round2(pace),
-		ByMember:         buildMemberForecasts(members, transactions, bills),
+		ByMember:         buildMemberForecasts(members, transactions, bills, year, month),
 	})
 }
 
@@ -126,6 +126,7 @@ func buildMemberForecasts(
 	members []models.Member,
 	transactions []models.Transaction,
 	bills []models.Bill,
+	year, month int,
 ) []models.MemberForecast {
 	out := make([]models.MemberForecast, 0, len(members))
 	for _, member := range members {
@@ -142,7 +143,7 @@ func buildMemberForecasts(
 			}
 		}
 		for _, bill := range bills {
-			share := billShareForMember(bill, member.ID)
+			share := billShareForMember(bill, member.ID, year, month)
 			billShare += share
 		}
 
@@ -163,8 +164,8 @@ func buildMemberForecasts(
 	return out
 }
 
-// billShareForMember splits a bill equally across its payers.
-func billShareForMember(bill models.Bill, memberID int) float64 {
+// billShareForMember splits the month charge equally across payers.
+func billShareForMember(bill models.Bill, memberID, year, month int) float64 {
 	if len(bill.MemberIDs) == 0 {
 		return 0
 	}
@@ -178,7 +179,7 @@ func billShareForMember(bill models.Bill, memberID int) float64 {
 	if !found {
 		return 0
 	}
-	return bill.Amount / float64(len(bill.MemberIDs))
+	return bill.ChargeForMonth(year, month) / float64(len(bill.MemberIDs))
 }
 
 func daysIn(year, month int) int {
