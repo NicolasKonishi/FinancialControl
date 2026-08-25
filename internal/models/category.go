@@ -6,7 +6,10 @@ import "time"
 var ValidCategoryIcons = map[string]struct{}{
 	"food": {}, "market": {}, "transport": {}, "home": {},
 	"health": {}, "leisure": {}, "salary": {}, "freelance": {},
-	"education": {}, "other": {},
+	"education": {}, "pets": {}, "clothing": {}, "shopping": {},
+	"travel": {}, "phone": {}, "cafe": {}, "kids": {},
+	"car": {}, "utilities": {}, "subscriptions": {}, "gift": {},
+	"investment": {}, "other": {},
 }
 
 // Category represents a financial category (e.g. Food, Transport).

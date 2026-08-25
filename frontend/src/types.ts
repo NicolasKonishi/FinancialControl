@@ -8,6 +8,18 @@ export type CategoryIcon =
   | 'salary'
   | 'freelance'
   | 'education'
+  | 'pets'
+  | 'clothing'
+  | 'shopping'
+  | 'travel'
+  | 'phone'
+  | 'cafe'
+  | 'kids'
+  | 'car'
+  | 'utilities'
+  | 'subscriptions'
+  | 'gift'
+  | 'investment'
   | 'other'
 
 export type Category = {
@@ -66,14 +78,21 @@ export type MonthlyForecast = {
   by_member: MemberForecast[]
 }
 
+export type BillFrequency = 'daily' | 'weekdays' | 'weekly' | 'biweekly' | 'monthly' | 'yearly'
+export type BillAmountMode = 'fixed' | 'interest' | 'schedule'
+export type BillRecurrence = 'ongoing' | 'until'
+
 export type Bill = {
   id: number
   name: string
   amount: number
+  amount_mode: BillAmountMode
+  interest_rate: number
   category_id: number
   member_ids: number[]
   due_day: number
-  recurrence: 'ongoing' | 'until'
+  frequency: BillFrequency
+  recurrence: BillRecurrence
   start_month: string
   end_month?: string | null
   notes?: string

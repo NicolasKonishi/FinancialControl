@@ -1,13 +1,33 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from './api'
-import { CategoryGlyph } from './icons'
+import { CATEGORY_ICONS, CategoryGlyph, iconLabel, PencilIcon, TrashIcon } from './icons'
 import { applyTheme, getPreferredTheme, persistTheme, type Theme } from './theme'
-import type { Bill, Category, Member, MonthlyForecast, Transaction } from './types'
+import { BillEndMonthPicker } from './BillEndMonthPicker'
+import { BillSchedulePicker } from './BillSchedulePicker'
+import { DayDatePicker } from './DayDatePicker'
+import { repeatSummary } from './billSchedule'
+import { billActiveInMonth, billChargeInMonth, parseLocaleNumber } from './billUtils'
+import {
+  CREDIT_CARDS,
+  creditCardFromDescription,
+  creditCardLabel,
+} from './creditCards'
+import type {
+  Bill,
+  BillAmountMode,
+  BillFrequency,
+  BillRecurrence,
+  Category,
+  CategoryIcon,
+  Member,
+  MonthlyForecast,
+  Transaction,
+} from './types'
 import './index.css'
 
-type View = 'home' | 'ledger' | 'bills' | 'family'
-type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | null
+type View = 'home' | 'ledger' | 'bills' | 'family' | 'categories'
+type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | null
 
 const currency = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
@@ -47,11 +67,17 @@ export default function App() {
   const [memberFilter, setMemberFilter] = useState<number | 'all'>('all')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [confirmDelete, setConfirmDelete] = useState<{
+    title: string
+    message: string
+    onConfirm: () => Promise<void>
+  } | null>(null)
 
   const [sheet, setSheet] = useState<SheetMode>(null)
   const [editingTxId, setEditingTxId] = useState<number | null>(null)
   const [editingMemberId, setEditingMemberId] = useState<number | null>(null)
   const [editingBillId, setEditingBillId] = useState<number | null>(null)
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null)
 
   const [txForm, setTxForm] = useState({
     category_id: 0,
@@ -59,15 +85,24 @@ export default function App() {
     description: '',
     amount: '',
     date: todayISO(),
+    credit_card: '',
   })
   const [memberForm, setMemberForm] = useState({ name: '', monthly_salary: '' })
+  const [categoryForm, setCategoryForm] = useState({
+    name: '',
+    description: '',
+    icon: 'other' as CategoryIcon,
+  })
   const [billForm, setBillForm] = useState({
     name: '',
     amount: '',
+    amount_mode: 'fixed' as BillAmountMode,
+    interest_rate: '',
     category_id: 0,
     member_ids: [] as number[],
     due_day: '10',
-    recurrence: 'ongoing' as 'ongoing' | 'until',
+    frequency: 'monthly' as BillFrequency,
+    recurrence: 'ongoing' as BillRecurrence,
     start_month: currentMonthKey(),
     end_month: '',
     notes: '',
@@ -87,14 +122,14 @@ export default function App() {
       .sort((a, b) => formatDate(b.date).localeCompare(formatDate(a.date)) || b.id - a.id)
   }, [transactions, year, month, memberFilter])
 
-  const monthBills = useMemo(() => {
-    return bills.filter((bill) => {
-      const target = `${year}-${String(month).padStart(2, '0')}`
-      if (target < bill.start_month) return false
-      if (bill.recurrence !== 'ongoing' && bill.end_month && target > bill.end_month) return false
-      if (memberFilter === 'all') return true
-      return (bill.member_ids ?? []).includes(memberFilter)
-    })
+  const listedBills = useMemo(() => {
+    return bills
+      .filter((bill) => billActiveInMonth(bill, year, month))
+      .filter((bill) => {
+        if (memberFilter === 'all') return true
+        return (bill.member_ids ?? []).includes(memberFilter)
+      })
+      .sort((a, b) => a.due_day - b.due_day || a.name.localeCompare(b.name))
   }, [bills, year, month, memberFilter])
 
   const selectedMemberForecast = useMemo(() => {
@@ -138,6 +173,28 @@ export default function App() {
     }
   }
 
+  function askDelete(title: string, message: string, action: () => Promise<void>) {
+    setConfirmDelete({
+      title,
+      message,
+      onConfirm: async () => {
+        try {
+          await action()
+          setConfirmDelete(null)
+          await refresh()
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Erro ao excluir'
+          setError(
+            msg.includes('FOREIGN KEY') || msg.includes('constraint')
+              ? 'Não é possível excluir: item ainda está em uso.'
+              : msg,
+          )
+          setConfirmDelete(null)
+        }
+      },
+    })
+  }
+
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
@@ -161,16 +218,23 @@ export default function App() {
     setEditingTxId(null)
     setEditingMemberId(null)
     setEditingBillId(null)
+    setEditingCategoryId(null)
     if (mode === 'member') {
       setMemberForm({ name: '', monthly_salary: '' })
+    } else if (mode === 'category') {
+      setCategoryForm({ name: '', description: '', icon: 'other' })
     } else if (mode === 'bill') {
       const home = categories.find((c) => c.icon === 'home') ?? categories[0]
+      const due = new Date().getDate()
       setBillForm({
         name: '',
         amount: '',
+        amount_mode: 'fixed',
+        interest_rate: '',
         category_id: home?.id || 0,
         member_ids: members.map((m) => m.id),
-        due_day: '10',
+        due_day: String(due),
+        frequency: 'monthly',
         recurrence: 'ongoing',
         start_month: currentMonthKey(),
         end_month: '',
@@ -184,6 +248,7 @@ export default function App() {
         description: 'Freelancer',
         amount: '',
         date: todayISO(),
+        credit_card: '',
       })
     } else if (mode === 'income') {
       const salary = categories.find((c) => c.icon === 'salary') ?? categories[0]
@@ -193,6 +258,7 @@ export default function App() {
         description: 'Entrada extra',
         amount: '',
         date: todayISO(),
+        credit_card: '',
       })
     } else if (mode === 'expense') {
       const market = categories.find((c) => c.icon === 'market' || c.icon === 'food') ?? categories[0]
@@ -202,6 +268,7 @@ export default function App() {
         description: '',
         amount: '',
         date: todayISO(),
+        credit_card: '',
       })
     }
     setSheet(mode)
@@ -213,13 +280,18 @@ export default function App() {
       setError('Crie ou selecione uma categoria.')
       return
     }
+    const amount = parseLocaleNumber(txForm.amount)
+    if (!(amount > 0)) {
+      setError('Informe um valor válido.')
+      return
+    }
     const type = sheet === 'expense' ? 'expense' : 'income'
     const payload = {
       category_id: txForm.category_id,
       member_id: txForm.member_id || null,
       type: type as 'income' | 'expense',
-      description: txForm.description,
-      amount: Number(txForm.amount),
+      description: txForm.description.trim(),
+      amount,
       date: txForm.date,
     }
     try {
@@ -254,18 +326,60 @@ export default function App() {
     }
   }
 
+  async function submitCategory(event: FormEvent) {
+    event.preventDefault()
+    const payload = {
+      name: categoryForm.name.trim(),
+      description: categoryForm.description.trim(),
+      icon: categoryForm.icon,
+    }
+    try {
+      if (editingCategoryId) {
+        await api.updateCategory(editingCategoryId, payload)
+      } else {
+        await api.createCategory(payload)
+      }
+      setSheet(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao salvar categoria')
+    }
+  }
+
   async function submitBill(event: FormEvent) {
     event.preventDefault()
     if (!billForm.category_id) {
       setError('Selecione uma categoria para a conta.')
       return
     }
+    if (billForm.recurrence === 'until' && !billForm.end_month) {
+      setError('Escolha o mês final.')
+      return
+    }
+    const isInterest = billForm.amount_mode === 'interest'
+    const amount = parseLocaleNumber(billForm.amount)
+    const interestRate = parseLocaleNumber(billForm.interest_rate)
+    if (isInterest && !(amount > 0)) {
+      setError('Informe o encargo do 1º mês (use vírgula ou ponto para decimais).')
+      return
+    }
+    if (isInterest && billForm.interest_rate !== '' && (Number.isNaN(interestRate) || interestRate < 0)) {
+      setError('Juros ao mês inválido.')
+      return
+    }
+    if (!isInterest && !(amount > 0)) {
+      setError('Informe o valor da conta.')
+      return
+    }
     const payload = {
       name: billForm.name,
-      amount: Number(billForm.amount),
+      amount,
+      amount_mode: billForm.amount_mode,
+      interest_rate: isInterest ? (Number.isNaN(interestRate) ? 0 : interestRate) : 0,
       category_id: billForm.category_id,
       member_ids: billForm.member_ids,
       due_day: Number(billForm.due_day),
+      frequency: billForm.frequency,
       recurrence: billForm.recurrence,
       start_month: billForm.start_month,
       end_month: billForm.recurrence === 'until' ? billForm.end_month : null,
@@ -291,6 +405,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="app-main">
       <header className="top">
         <div>
           <h1>Fluxo</h1>
@@ -378,71 +493,72 @@ export default function App() {
         </section>
       )}
 
-      {memberFilter === 'all' && (forecast?.by_member?.length ?? 0) > 0 && view === 'home' && (
-        <section className="card">
-          <h2>Por pessoa</h2>
-          <p className="meta" style={{ marginBottom: '0.85rem' }}>
-            Quanto cada um paga e quanto sobra no mês.
-          </p>
-          <div className="list">
-            {(forecast?.by_member ?? []).map((item) => (
-              <article key={item.member_id} className="row">
-                <div className="icon-wrap">
-                  <CategoryGlyph icon="salary" />
-                </div>
-                <div>
-                  <h3>{item.member_name}</h3>
-                  <p>
-                    pagar {currency.format(item.total_to_pay)} · contas{' '}
-                    {currency.format(item.bill_share)}
-                  </p>
-                </div>
-                <div className={`amount ${item.remaining < 0 ? 'expense' : 'income'}`}>
-                  {currency.format(item.remaining)}
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
       {view === 'home' && (
         <>
           {memberFilter === 'all' && (
-            <section className="card">
-              <h2>Previsão do mês</h2>
-              <p className={`hero-value ${(forecast?.remaining ?? 0) < 0 ? 'neg' : 'pos'}`}>
-                {currency.format(forecast?.remaining ?? 0)}
-              </p>
-              <p className="meta">
-                sobrando de {currency.format(forecast?.total_available ?? 0)} disponíveis
-              </p>
-              <div className="metrics">
-                <div className="metric">
-                  <span>Salários planejados</span>
-                  <strong>{currency.format(forecast?.planned_salary ?? 0)}</strong>
+            <div className="home-dash">
+              {(forecast?.by_member?.length ?? 0) > 0 && (
+                <section className="card">
+                  <h2>Por pessoa</h2>
+                  <p className="meta" style={{ marginBottom: '0.85rem' }}>
+                    Quanto cada um paga e quanto sobra no mês.
+                  </p>
+                  <div className="list">
+                    {(forecast?.by_member ?? []).map((item) => (
+                      <article key={item.member_id} className="row">
+                        <div className="icon-wrap">
+                          <CategoryGlyph icon="salary" />
+                        </div>
+                        <div>
+                          <h3>{item.member_name}</h3>
+                          <p>
+                            pagar {currency.format(item.total_to_pay)} · contas{' '}
+                            {currency.format(item.bill_share)}
+                          </p>
+                        </div>
+                        <div className={`amount ${item.remaining < 0 ? 'expense' : 'income'}`}>
+                          {currency.format(item.remaining)}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+              <section className="card">
+                <h2>Previsão do mês</h2>
+                <p className={`hero-value ${(forecast?.remaining ?? 0) < 0 ? 'neg' : 'pos'}`}>
+                  {currency.format(forecast?.remaining ?? 0)}
+                </p>
+                <p className="meta">
+                  sobrando de {currency.format(forecast?.total_available ?? 0)} disponíveis
+                </p>
+                <div className="metrics">
+                  <div className="metric">
+                    <span>Salários planejados</span>
+                    <strong>{currency.format(forecast?.planned_salary ?? 0)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>Extras / freelancer</span>
+                    <strong>{currency.format(forecast?.extra_income ?? 0)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>Contas do mês</span>
+                    <strong>{currency.format(forecast?.planned_bills ?? 0)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>Total comprometido</span>
+                    <strong>{currency.format(forecast?.total_expense ?? 0)}</strong>
+                  </div>
                 </div>
-                <div className="metric">
-                  <span>Extras / freelancer</span>
-                  <strong>{currency.format(forecast?.extra_income ?? 0)}</strong>
+                <div className={`progress ${paceClass}`} title="Ritmo de gasto projetado">
+                  <i style={{ width: `${usedRatio * 100}%` }} />
                 </div>
-                <div className="metric">
-                  <span>Contas do mês</span>
-                  <strong>{currency.format(forecast?.planned_bills ?? 0)}</strong>
-                </div>
-                <div className="metric">
-                  <span>Total comprometido</span>
-                  <strong>{currency.format(forecast?.total_expense ?? 0)}</strong>
-                </div>
-              </div>
-              <div className={`progress ${paceClass}`} title="Ritmo de gasto projetado">
-                <i style={{ width: `${usedRatio * 100}%` }} />
-              </div>
-              <p className="meta">
-                Pode gastar cerca de {currency.format(forecast?.safe_daily_spend ?? 0)} por dia nos próximos{' '}
-                {forecast?.days_remaining ?? 0} dias.
-              </p>
-            </section>
+                <p className="meta">
+                  Pode gastar cerca de {currency.format(forecast?.safe_daily_spend ?? 0)} por dia nos próximos{' '}
+                  {forecast?.days_remaining ?? 0} dias.
+                </p>
+              </section>
+            </div>
           )}
 
           <div className="actions">
@@ -512,16 +628,20 @@ export default function App() {
                     <div className="icon-wrap">
                       <CategoryGlyph icon={cat?.icon ?? 'other'} />
                     </div>
-                    <div>
+                    <div className="row-main">
                       <h3>{tx.description}</h3>
                       <p>
                         {cat?.name ?? 'Categoria'}
                         {member ? ` · ${member.name}` : ''} · {formatDate(tx.date)}
                       </p>
+                    </div>
+                    <div className="row-side">
                       <div className="row-actions">
                         <button
                           type="button"
-                          className="ghost"
+                          className="icon-btn"
+                          aria-label="Editar lançamento"
+                          title="Editar"
                           onClick={() => {
                             setEditingTxId(tx.id)
                             setTxForm({
@@ -530,33 +650,36 @@ export default function App() {
                               description: tx.description,
                               amount: String(tx.amount),
                               date: formatDate(tx.date),
+                              credit_card:
+                                tx.type === 'expense'
+                                  ? creditCardFromDescription(tx.description)
+                                  : '',
                             })
                             setSheet(tx.type === 'expense' ? 'expense' : 'income')
                           }}
                         >
-                          Editar
+                          <PencilIcon />
                         </button>
                         <button
                           type="button"
-                          className="danger"
-                          onClick={() => {
-                            void (async () => {
-                              try {
-                                await api.deleteTransaction(tx.id)
-                                await refresh()
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : 'Erro ao excluir')
-                              }
-                            })()
-                          }}
+                          className="icon-btn danger"
+                          aria-label="Excluir lançamento"
+                          title="Excluir"
+                          onClick={() =>
+                            askDelete(
+                              'Excluir lançamento?',
+                              `Tem certeza que deseja excluir “${tx.description}”? Essa ação não pode ser desfeita.`,
+                              () => api.deleteTransaction(tx.id),
+                            )
+                          }
                         >
-                          Excluir
+                          <TrashIcon />
                         </button>
                       </div>
-                    </div>
-                    <div className={`amount ${tx.type}`}>
-                      {tx.type === 'expense' ? '−' : '+'}
-                      {currency.format(tx.amount)}
+                      <div className={`amount ${tx.type}`}>
+                        {tx.type === 'expense' ? '−' : '+'}
+                        {currency.format(tx.amount)}
+                      </div>
                     </div>
                   </article>
                 )
@@ -574,15 +697,16 @@ export default function App() {
           <h2>Contas mensais</h2>
           <p className="meta" style={{ marginBottom: '0.85rem' }}>
             {memberFilter === 'all'
-              ? 'Fixas (luz, internet) ou com término (assinatura, crédito).'
+              ? 'Escolha a frequência (mês, semana, dia…) e se termina ou não.'
               : `Contas em que ${selectedMemberForecast?.member_name ?? 'esta pessoa'} participa.`}
           </p>
-          {monthBills.length === 0 ? (
+          {listedBills.length === 0 ? (
             <p className="empty">Nenhuma conta ativa neste mês.</p>
           ) : (
             <div className="list">
-              {monthBills.map((bill) => {
+              {listedBills.map((bill) => {
                 const cat = categoryById.get(bill.category_id)
+                const monthAmount = billChargeInMonth(bill, year, month)
                 const payers = (bill.member_ids ?? [])
                   .map((id) => memberById.get(id)?.name)
                   .filter(Boolean)
@@ -592,27 +716,40 @@ export default function App() {
                     <div className="icon-wrap">
                       <CategoryGlyph icon={cat?.icon ?? 'home'} />
                     </div>
-                    <div>
+                    <div className="row-main">
                       <h3>{bill.name}</h3>
                       <p>
-                        dia {bill.due_day} · {cat?.name ?? 'Categoria'} ·{' '}
+                        {currency.format(monthAmount)} ·{' '}
+                        {bill.amount_mode === 'interest' || bill.amount_mode === 'schedule'
+                          ? `${(bill.interest_rate ?? 0) > 0 ? `${bill.interest_rate}% ao mês · ` : ''}evolução de obra`
+                          : repeatSummary(bill.frequency || 'monthly', bill.start_month, bill.due_day)}{' '}
+                        · {cat?.name ?? 'Categoria'} ·{' '}
                         {bill.recurrence === 'ongoing'
-                          ? 'sempre'
+                          ? 'sem término'
                           : `até ${bill.end_month}`}
                         {payers ? ` · ${payers}` : ' · sem responsáveis'}
                       </p>
+                    </div>
+                    <div className="row-side">
                       <div className="row-actions">
                         <button
                           type="button"
-                          className="ghost"
+                          className="icon-btn"
+                          aria-label="Editar conta"
+                          title="Editar"
                           onClick={() => {
                             setEditingBillId(bill.id)
                             setBillForm({
                               name: bill.name,
                               amount: String(bill.amount),
+                              amount_mode:
+                                bill.amount_mode === 'schedule' ? 'interest' : bill.amount_mode || 'fixed',
+                              interest_rate:
+                                bill.interest_rate > 0 ? String(bill.interest_rate) : '',
                               category_id: bill.category_id,
                               member_ids: bill.member_ids ?? [],
                               due_day: String(bill.due_day),
+                              frequency: bill.frequency || 'monthly',
                               recurrence: bill.recurrence,
                               start_month: bill.start_month,
                               end_month: bill.end_month ?? '',
@@ -621,27 +758,26 @@ export default function App() {
                             setSheet('bill')
                           }}
                         >
-                          Editar
+                          <PencilIcon />
                         </button>
                         <button
                           type="button"
-                          className="danger"
-                          onClick={() => {
-                            void (async () => {
-                              try {
-                                await api.deleteBill(bill.id)
-                                await refresh()
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : 'Erro ao excluir')
-                              }
-                            })()
-                          }}
+                          className="icon-btn danger"
+                          aria-label="Excluir conta"
+                          title="Excluir"
+                          onClick={() =>
+                            askDelete(
+                              'Excluir conta?',
+                              `Tem certeza que deseja excluir “${bill.name}”? Essa ação não pode ser desfeita.`,
+                              () => api.deleteBill(bill.id),
+                            )
+                          }
                         >
-                          Excluir
+                          <TrashIcon />
                         </button>
                       </div>
+                      <div className="amount expense">{currency.format(monthAmount)}</div>
                     </div>
-                    <div className="amount expense">{currency.format(bill.amount)}</div>
                   </article>
                 )
               })}
@@ -668,13 +804,17 @@ export default function App() {
                   <div className="icon-wrap">
                     <CategoryGlyph icon="salary" />
                   </div>
-                  <div>
+                  <div className="row-main">
                     <h3>{member.name}</h3>
                     <p>Salário mensal</p>
+                  </div>
+                  <div className="row-side">
                     <div className="row-actions">
                       <button
                         type="button"
-                        className="ghost"
+                        className="icon-btn"
+                        aria-label="Editar pessoa"
+                        title="Editar"
                         onClick={() => {
                           setEditingMemberId(member.id)
                           setMemberForm({
@@ -684,27 +824,26 @@ export default function App() {
                           setSheet('member')
                         }}
                       >
-                        Editar
+                        <PencilIcon />
                       </button>
                       <button
                         type="button"
-                        className="danger"
-                        onClick={() => {
-                          void (async () => {
-                            try {
-                              await api.deleteMember(member.id)
-                              await refresh()
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : 'Erro ao excluir')
-                            }
-                          })()
-                        }}
+                        className="icon-btn danger"
+                        aria-label="Excluir pessoa"
+                        title="Excluir"
+                        onClick={() =>
+                          askDelete(
+                            'Excluir pessoa?',
+                            `Tem certeza que deseja excluir “${member.name}” da família? Essa ação não pode ser desfeita.`,
+                            () => api.deleteMember(member.id),
+                          )
+                        }
                       >
-                        Excluir
+                        <TrashIcon />
                       </button>
                     </div>
+                    <div className="amount income">{currency.format(member.monthly_salary)}</div>
                   </div>
-                  <div className="amount income">{currency.format(member.monthly_salary)}</div>
                 </article>
               ))}
             </div>
@@ -714,6 +853,73 @@ export default function App() {
           </button>
         </section>
       )}
+
+      {view === 'categories' && (
+        <section className="card">
+          <h2>Categorias</h2>
+          <p className="meta" style={{ marginBottom: '0.85rem' }}>
+            Organize gastos, entradas e contas.
+          </p>
+          {categories.length === 0 ? (
+            <p className="empty">Nenhuma categoria cadastrada.</p>
+          ) : (
+            <div className="list">
+              {categories.map((cat) => (
+                <article key={cat.id} className="row">
+                  <div className="icon-wrap">
+                    <CategoryGlyph icon={cat.icon} />
+                  </div>
+                  <div className="row-main">
+                    <h3>{cat.name}</h3>
+                    <p>
+                      {iconLabel(cat.icon)}
+                      {cat.description ? ` · ${cat.description}` : ''}
+                    </p>
+                  </div>
+                  <div className="row-actions">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="Editar categoria"
+                      title="Editar"
+                      onClick={() => {
+                        setEditingCategoryId(cat.id)
+                        setCategoryForm({
+                          name: cat.name,
+                          description: cat.description ?? '',
+                          icon: (cat.icon as CategoryIcon) || 'other',
+                        })
+                        setSheet('category')
+                      }}
+                    >
+                      <PencilIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      aria-label="Excluir categoria"
+                      title="Excluir"
+                      onClick={() =>
+                        askDelete(
+                          'Excluir categoria?',
+                          `Tem certeza que deseja excluir “${cat.name}”? Essa ação não pode ser desfeita.`,
+                          () => api.deleteCategory(cat.id),
+                        )
+                      }
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          <button type="button" className="primary" onClick={() => openSheet('category')}>
+            Nova categoria
+          </button>
+        </section>
+      )}
+      </div>
 
       <nav className="bottom-nav" aria-label="Navegação">
         <button type="button" className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}>
@@ -728,6 +934,13 @@ export default function App() {
         <button type="button" className={view === 'family' ? 'active' : ''} onClick={() => setView('family')}>
           Família
         </button>
+        <button
+          type="button"
+          className={view === 'categories' ? 'active' : ''}
+          onClick={() => setView('categories')}
+        >
+          Categorias
+        </button>
       </nav>
 
       {sheet && (
@@ -739,6 +952,10 @@ export default function App() {
                   ? editingMemberId
                     ? 'Editar pessoa'
                     : 'Nova pessoa'
+                  : sheet === 'category'
+                    ? editingCategoryId
+                      ? 'Editar categoria'
+                      : 'Nova categoria'
                   : sheet === 'bill'
                     ? editingBillId
                       ? 'Editar conta'
@@ -785,188 +1002,307 @@ export default function App() {
                   Salvar
                 </button>
               </form>
-            ) : sheet === 'bill' ? (
-              <form className="form" onSubmit={submitBill}>
+            ) : sheet === 'category' ? (
+              <form className="form" onSubmit={submitCategory}>
                 <label>
-                  Nome da conta
+                  Nome
                   <input
                     required
-                    value={billForm.name}
-                    onChange={(e) => setBillForm((p) => ({ ...p, name: e.target.value }))}
-                    placeholder="Internet, Luz, Netflix…"
+                    value={categoryForm.name}
+                    onChange={(e) => setCategoryForm((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="Ex.: Mercado, Pet…"
                   />
                 </label>
                 <label>
-                  Valor mensal
+                  Descrição
                   <input
-                    required
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={billForm.amount}
-                    onChange={(e) => setBillForm((p) => ({ ...p, amount: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Tipo
-                  <select
-                    value={billForm.recurrence}
-                    onChange={(e) =>
-                      setBillForm((p) => ({
-                        ...p,
-                        recurrence: e.target.value as 'ongoing' | 'until',
-                      }))
-                    }
-                  >
-                    <option value="ongoing">Sempre (luz, internet…)</option>
-                    <option value="until">Com término (assinatura, crédito…)</option>
-                  </select>
-                </label>
-                <label>
-                  Dia do vencimento
-                  <input
-                    required
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={billForm.due_day}
-                    onChange={(e) => setBillForm((p) => ({ ...p, due_day: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Começa em
-                  <input
-                    required
-                    type="month"
-                    value={billForm.start_month}
-                    onChange={(e) => setBillForm((p) => ({ ...p, start_month: e.target.value }))}
-                  />
-                </label>
-                {billForm.recurrence === 'until' ? (
-                  <label>
-                    Termina em
-                    <input
-                      required
-                      type="month"
-                      value={billForm.end_month}
-                      onChange={(e) => setBillForm((p) => ({ ...p, end_month: e.target.value }))}
-                    />
-                  </label>
-                ) : null}
-                <label>
-                  Categoria
-                  <select
-                    required
-                    value={billForm.category_id || ''}
-                    onChange={(e) => setBillForm((p) => ({ ...p, category_id: Number(e.target.value) }))}
-                  >
-                    {categories.map((cat) => (
-                      <option key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Quem paga
-                  <div className="check-list">
-                    {members.length === 0 ? (
-                      <span className="meta">Cadastre a família primeiro.</span>
-                    ) : (
-                      members.map((member) => {
-                        const checked = billForm.member_ids.includes(member.id)
-                        return (
-                          <label key={member.id} className="check-item">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setBillForm((prev) => ({
-                                  ...prev,
-                                  member_ids: checked
-                                    ? prev.member_ids.filter((id) => id !== member.id)
-                                    : [...prev.member_ids, member.id],
-                                }))
-                              }}
-                            />
-                            <span>{member.name}</span>
-                          </label>
-                        )
-                      })
-                    )}
-                  </div>
-                </label>
-                <label>
-                  Observação
-                  <input
-                    value={billForm.notes}
-                    onChange={(e) => setBillForm((p) => ({ ...p, notes: e.target.value }))}
+                    value={categoryForm.description}
+                    onChange={(e) => setCategoryForm((p) => ({ ...p, description: e.target.value }))}
                     placeholder="Opcional"
                   />
                 </label>
+                <div>
+                  <span className="field-label">Ícone</span>
+                  <div className="icon-picker">
+                    {CATEGORY_ICONS.map((icon) => (
+                      <button
+                        key={icon}
+                        type="button"
+                        className={categoryForm.icon === icon ? 'active' : ''}
+                        aria-label={iconLabel(icon)}
+                        title={iconLabel(icon)}
+                        onClick={() => setCategoryForm((p) => ({ ...p, icon }))}
+                      >
+                        <CategoryGlyph icon={icon} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button className="primary" type="submit">
+                  Salvar
+                </button>
+              </form>
+            ) : sheet === 'bill' ? (
+              <form className="form bill-form" onSubmit={submitBill} noValidate>
+                <div className="bill-form-layout">
+                  <BillSchedulePicker
+                    startMonth={billForm.start_month}
+                    dueDay={Number(billForm.due_day) || 1}
+                    frequency={billForm.frequency}
+                    onDateChange={(startMonth, dueDay) =>
+                      setBillForm((p) => ({
+                        ...p,
+                        start_month: startMonth,
+                        due_day: String(dueDay),
+                      }))
+                    }
+                    onFrequencyChange={(frequency) =>
+                      setBillForm((p) => ({ ...p, frequency }))
+                    }
+                  />
+                  <div className="bill-form-fields">
+                    <label>
+                      Nome
+                      <input
+                        required
+                        value={billForm.name}
+                        onChange={(e) => setBillForm((p) => ({ ...p, name: e.target.value }))}
+                        placeholder="Internet, Luz…"
+                      />
+                    </label>
+                    <label>
+                      Tipo de valor
+                      <select
+                        value={billForm.amount_mode}
+                        onChange={(e) => {
+                          const amount_mode = e.target.value as BillAmountMode
+                          setBillForm((p) => ({ ...p, amount_mode }))
+                        }}
+                      >
+                        <option value="fixed">Valor fixo</option>
+                        <option value="interest">Evolução de obra (% juros ao mês)</option>
+                      </select>
+                    </label>
+                    {billForm.amount_mode === 'fixed' ? (
+                      <label>
+                        Valor
+                        <input
+                          required
+                          type="text"
+                          inputMode="decimal"
+                          value={billForm.amount}
+                          onChange={(e) => setBillForm((p) => ({ ...p, amount: e.target.value }))}
+                        />
+                      </label>
+                    ) : (
+                      <>
+                        <label>
+                          Encargo inicial (1º mês)
+                          <input
+                            required
+                            type="text"
+                            inputMode="decimal"
+                            value={billForm.amount}
+                            onChange={(e) => setBillForm((p) => ({ ...p, amount: e.target.value }))}
+                            placeholder="316,86"
+                          />
+                        </label>
+                        <label>
+                          Juros ao mês (%)
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={billForm.interest_rate}
+                            onChange={(e) =>
+                              setBillForm((p) => ({ ...p, interest_rate: e.target.value }))
+                            }
+                            placeholder="0,27"
+                          />
+                        </label>
+                      </>
+                    )}
+                    <label>
+                      Duração
+                      <select
+                        value={billForm.recurrence}
+                        onChange={(e) =>
+                          setBillForm((p) => ({
+                            ...p,
+                            recurrence: e.target.value as BillRecurrence,
+                            end_month:
+                              e.target.value === 'until' && !p.end_month ? p.start_month : p.end_month,
+                          }))
+                        }
+                      >
+                        <option value="ongoing">Sem duração de término</option>
+                        <option value="until">Termina em…</option>
+                      </select>
+                    </label>
+                    {billForm.recurrence === 'until' ? (
+                      <BillEndMonthPicker
+                        value={billForm.end_month}
+                        minMonth={billForm.start_month}
+                        onChange={(end_month) => setBillForm((p) => ({ ...p, end_month }))}
+                      />
+                    ) : null}
+                    <label>
+                      Categoria
+                      <select
+                        required
+                        value={billForm.category_id || ''}
+                        onChange={(e) =>
+                          setBillForm((p) => ({ ...p, category_id: Number(e.target.value) }))
+                        }
+                      >
+                        {categories.map((cat) => (
+                          <option key={cat.id} value={cat.id}>
+                            {cat.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Quem paga
+                      <div className="check-list check-list-compact">
+                        {members.length === 0 ? (
+                          <span className="meta">Cadastre a família primeiro.</span>
+                        ) : (
+                          members.map((member) => {
+                            const checked = billForm.member_ids.includes(member.id)
+                            return (
+                              <label key={member.id} className="check-item">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => {
+                                    setBillForm((prev) => ({
+                                      ...prev,
+                                      member_ids: checked
+                                        ? prev.member_ids.filter((id) => id !== member.id)
+                                        : [...prev.member_ids, member.id],
+                                    }))
+                                  }}
+                                />
+                                <span>{member.name}</span>
+                              </label>
+                            )
+                          })
+                        )}
+                      </div>
+                    </label>
+                    <label>
+                      Obs.
+                      <input
+                        value={billForm.notes}
+                        onChange={(e) => setBillForm((p) => ({ ...p, notes: e.target.value }))}
+                        placeholder="Opcional"
+                      />
+                    </label>
+                  </div>
+                </div>
                 <button className="primary" type="submit">
                   Salvar
                 </button>
               </form>
             ) : (
-              <form className="form" onSubmit={submitTransaction}>
-                <label>
-                  Descrição
-                  <input
-                    required
-                    value={txForm.description}
-                    onChange={(e) => setTxForm((p) => ({ ...p, description: e.target.value }))}
-                    placeholder={sheet === 'expense' ? 'Mercado, almoço…' : 'Pagamento, freelance…'}
-                  />
-                </label>
-                <label>
-                  Valor
-                  <input
-                    required
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={txForm.amount}
-                    onChange={(e) => setTxForm((p) => ({ ...p, amount: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Categoria
-                  <select
-                    required
-                    value={txForm.category_id || ''}
-                    onChange={(e) => setTxForm((p) => ({ ...p, category_id: Number(e.target.value) }))}
-                  >
-                    {categories.map((cat) => (
-                      <option key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Pessoa
-                  <select
-                    value={txForm.member_id || ''}
-                    onChange={(e) => setTxForm((p) => ({ ...p, member_id: Number(e.target.value) }))}
-                  >
-                    <option value="">Sem vínculo</option>
-                    {members.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Data
-                  <input
-                    required
-                    type="date"
+              <form className="form bill-form" onSubmit={submitTransaction}>
+                <div className="bill-form-layout">
+                  <DayDatePicker
                     value={txForm.date}
-                    onChange={(e) => setTxForm((p) => ({ ...p, date: e.target.value }))}
+                    onChange={(date) => setTxForm((p) => ({ ...p, date }))}
                   />
-                </label>
+                  <div className="bill-form-fields">
+                    {sheet === 'expense' ? (
+                      <label>
+                        Cartão de crédito
+                        <select
+                          value={txForm.credit_card}
+                          onChange={(e) => {
+                            const credit_card = e.target.value
+                            const label = creditCardLabel(credit_card)
+                            setTxForm((p) => {
+                              const previousLabel = creditCardLabel(p.credit_card)
+                              const descriptionWasAuto =
+                                !p.description.trim() ||
+                                p.description.trim() === previousLabel
+                              return {
+                                ...p,
+                                credit_card,
+                                description:
+                                  credit_card && descriptionWasAuto
+                                    ? label
+                                    : !credit_card && p.description.trim() === previousLabel
+                                      ? ''
+                                      : p.description,
+                              }
+                            })
+                          }}
+                        >
+                          {CREDIT_CARDS.map((card) => (
+                            <option key={card.id || 'none'} value={card.id}>
+                              {card.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    <label>
+                      Descrição
+                      <input
+                        required
+                        value={txForm.description}
+                        onChange={(e) => setTxForm((p) => ({ ...p, description: e.target.value }))}
+                        placeholder={
+                          sheet === 'expense'
+                            ? 'Mercado, almoço… ou escolha o cartão'
+                            : 'Pagamento, freelance…'
+                        }
+                      />
+                    </label>
+                    <label>
+                      Valor
+                      <input
+                        required
+                        type="text"
+                        inputMode="decimal"
+                        value={txForm.amount}
+                        onChange={(e) => setTxForm((p) => ({ ...p, amount: e.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Categoria
+                      <select
+                        required
+                        value={txForm.category_id || ''}
+                        onChange={(e) =>
+                          setTxForm((p) => ({ ...p, category_id: Number(e.target.value) }))
+                        }
+                      >
+                        {categories.map((cat) => (
+                          <option key={cat.id} value={cat.id}>
+                            {cat.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Pessoa
+                      <select
+                        value={txForm.member_id || ''}
+                        onChange={(e) =>
+                          setTxForm((p) => ({ ...p, member_id: Number(e.target.value) }))
+                        }
+                      >
+                        <option value="">Sem vínculo</option>
+                        {members.map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
                 <button className="primary" type="submit">
                   Salvar
                 </button>
@@ -975,6 +1311,39 @@ export default function App() {
           </div>
         </div>
       )}
+      {confirmDelete ? (
+        <div
+          className="sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-delete-title"
+          onClick={() => setConfirmDelete(null)}
+        >
+          <div className="sheet-panel confirm-panel" onClick={(e) => e.stopPropagation()}>
+            <header>
+              <h2 id="confirm-delete-title">{confirmDelete.title}</h2>
+              <button type="button" className="ghost" onClick={() => setConfirmDelete(null)}>
+                Fechar
+              </button>
+            </header>
+            <p className="confirm-message">{confirmDelete.message}</p>
+            <div className="confirm-actions">
+              <button type="button" className="ghost confirm-cancel" onClick={() => setConfirmDelete(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="primary confirm-danger"
+                onClick={() => {
+                  void confirmDelete.onConfirm()
+                }}
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

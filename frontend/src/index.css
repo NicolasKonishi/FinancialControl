@@ -21,8 +21,8 @@
   --shadow: 0 10px 30px rgba(28, 26, 23, 0.06);
   --radius: 16px;
   --nav-h: 68px;
-  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --display: "IBM Plex Serif", Georgia, serif;
+  --font: "Montserrat", sans-serif;
+  --display: "Montserrat", sans-serif;
   color-scheme: light;
 }
 
@@ -175,6 +175,384 @@ select {
   color: var(--on-accent);
   border-color: var(--accent);
   font-weight: 650;
+}
+
+.field-label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.repeat-field {
+  position: relative;
+}
+
+.repeat-trigger {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.repeat-trigger:hover {
+  border-color: var(--ink);
+}
+
+.repeat-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 0.35rem;
+  display: grid;
+  gap: 0.1rem;
+  max-height: min(50dvh, 320px);
+  overflow: auto;
+}
+
+.repeat-menu button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 0.72rem 0.8rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.repeat-menu button .muted {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.repeat-menu button:hover,
+.repeat-menu button.active {
+  background: var(--soft-strong);
+}
+
+.repeat-menu .repeat-customize {
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 10px 10px;
+  margin-top: 0.15rem;
+  padding-top: 0.85rem;
+}
+
+.repeat-menu .repeat-back {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+
+.bill-schedule {
+  display: grid;
+  gap: 0.45rem;
+  width: 12.75rem;
+  flex-shrink: 0;
+}
+
+.bill-form-layout {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.bill-form-fields {
+  display: grid;
+  gap: 0.45rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.bill-form-fields label {
+  gap: 0.2rem;
+  font-size: 0.72rem;
+}
+
+.bill-form-fields input,
+.bill-form-fields select {
+  padding: 0.42rem 0.5rem;
+  font-size: 0.82rem;
+  border-radius: 9px;
+}
+
+.bill-form-fields .check-list-compact {
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 9px;
+}
+
+.bill-form-fields .check-item {
+  font-size: 0.78rem;
+  gap: 0.4rem;
+}
+
+.bill-form .primary {
+  margin-top: 0.15rem;
+}
+
+.bill-installments {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.installment-head,
+.installment-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.installment-head {
+  font-size: 0.68rem;
+  color: var(--muted);
+  padding: 0 0.1rem;
+}
+
+.installment-row input {
+  padding: 0.42rem 0.5rem;
+  font-size: 0.82rem;
+  border-radius: 9px;
+}
+
+.installment-add {
+  justify-self: start;
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+}
+
+.bill-calendar {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.55rem 0.45rem 0.5rem;
+}
+
+.bill-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+  padding: 0 0.05rem;
+}
+
+.bill-calendar-title {
+  font-weight: 650;
+  font-size: 0.82rem;
+  color: var(--ink);
+  text-transform: capitalize;
+}
+
+.bill-calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.bill-calendar-nav button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+
+.bill-calendar-nav button:hover {
+  background: var(--soft-strong);
+  color: var(--ink);
+}
+
+.bill-calendar-nav .today-dot {
+  font-size: 0.75rem;
+}
+
+.bill-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.05rem;
+  margin-bottom: 0.2rem;
+}
+
+.bill-calendar-weekdays span {
+  text-align: center;
+  font-size: 0.62rem;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.bill-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.05rem;
+}
+
+.bill-calendar-day {
+  height: 1.65rem;
+  border: 0;
+  background: transparent;
+  color: #5dba86;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.bill-calendar-day.outside {
+  color: #5dba86;
+  opacity: 0.35;
+}
+
+.bill-calendar-day.today:not(.selected) {
+  box-shadow: inset 0 0 0 1px #5dba86;
+}
+
+.bill-calendar-day:hover:not(.selected) {
+  background: rgba(93, 186, 134, 0.14);
+}
+
+.bill-calendar-day.selected {
+  background: #5dba86;
+  color: #fff;
+  font-weight: 650;
+}
+
+.bill-schedule-actions {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.bill-schedule-btn {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.5rem;
+  row-gap: 0.05rem;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.bill-schedule-btn svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  grid-row: 1 / span 2;
+  color: var(--muted);
+}
+
+.bill-schedule-btn span {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.bill-schedule-btn small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.bill-schedule-btn:hover,
+.bill-schedule-btn.active {
+  border-color: var(--ink);
+  background: var(--soft);
+}
+
+.repeat-menu-inline {
+  position: static;
+  max-height: none;
+  font-size: 0.88rem;
+}
+
+.repeat-menu-inline button {
+  padding: 0.55rem 0.65rem;
+}
+
+.bill-end-month {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.bill-end-month-trigger small {
+  text-transform: capitalize;
+}
+
+.bill-end-month-panel {
+  margin-top: 0;
+}
+
+.bill-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.25rem;
+}
+
+.bill-month-cell {
+  border: 0;
+  background: transparent;
+  color: #5dba86;
+  border-radius: 8px;
+  padding: 0.42rem 0.15rem;
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+  text-transform: lowercase;
+}
+
+.bill-month-cell:hover:not(:disabled):not(.selected) {
+  background: rgba(93, 186, 134, 0.14);
+}
+
+.bill-month-cell.selected {
+  background: #5dba86;
+  color: #fff;
+  font-weight: 650;
+}
+
+.bill-month-cell:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.home-dash {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 0.85rem;
+}
+
+.home-dash > .card {
+  margin-bottom: 0;
 }
 
 .card {
@@ -334,6 +712,23 @@ select {
   font-size: 0.8rem;
 }
 
+.row-main {
+  min-width: 0;
+}
+
+.row-main h3,
+.row-main p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-side {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: end;
+  align-content: center;
+}
+
 .amount {
   font-weight: 650;
   font-size: 0.95rem;
@@ -351,8 +746,8 @@ select {
 .row-actions {
   display: flex;
   gap: 0.35rem;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: 0.25rem;
 }
 
 .row-actions button,
@@ -368,13 +763,76 @@ select {
   font-size: 0.82rem;
 }
 
+.icon-btn {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  border-color: var(--ink);
+}
+
+.icon-btn.danger {
+  padding : 0;
+  color: var(--expense);
+  border-color: var(--danger-line);
+}
+
+.icon-btn.danger:hover {
+  background: rgba(220, 80, 80, 0.1);
+}
+
+.action-glyph {
+  height: 1rem;
+  display: block;
+}
+
+.confirm-panel {
+  max-width: 22rem;
+}
+
+.confirm-message {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.confirm-actions .confirm-cancel {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+}
+
+.confirm-actions .confirm-danger {
+  width: 100%;
+  margin-top: 0;
+  background: var(--expense);
+  border-color: var(--expense);
+  color: #fff;
+}
+
 .primary {
   background: var(--accent);
   color: var(--on-accent);
   border-color: var(--accent);
   width: 100%;
   padding: 0.85rem 1rem;
-  margin-top: 0.35rem;
+  margin-top: 0.5rem;
 }
 
 .danger {
@@ -452,7 +910,7 @@ select {
   width: min(560px, 100%);
   height: var(--nav-h);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: var(--nav-bg);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
@@ -464,10 +922,43 @@ select {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   display: grid;
   place-items: center;
   gap: 0.15rem;
+  padding: 0 0.15rem;
+}
+
+.icon-picker {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.icon-picker button {
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+  border-radius: 12px;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--ink);
+  padding: 0;
+}
+
+.icon-picker button.active {
+  border-color: var(--income);
+  background: rgba(93, 186, 134, 0.12);
+  color: var(--income);
+}
+
+.icon-picker .glyph {
+  width: 1.15rem;
+  height: 1.15rem;
 }
 
 .bottom-nav button.active {
@@ -496,6 +987,10 @@ select {
   border: 1px solid var(--line);
 }
 
+.sheet-panel:has(.bill-form) {
+  width: min(34rem, 100%);
+}
+
 .sheet-panel header {
   display: flex;
   justify-content: space-between;
@@ -510,8 +1005,160 @@ select {
   color: var(--ink);
 }
 
-@media (min-width: 720px) {
+@media (max-width: 420px) {
+  .bill-form-layout {
+    flex-direction: column;
+  }
+
+  .bill-schedule {
+    width: 100%;
+    max-width: 13rem;
+  }
+}
+
+@media (min-width: 900px) {
   .app {
-    padding-top: 1.5rem;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 15.5rem minmax(0, 1fr);
+    min-height: 100dvh;
+  }
+
+  .app-main {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 100dvh;
+    padding: 1.5rem 2rem 2rem;
+  }
+
+  .bottom-nav {
+    position: sticky;
+    top: 0;
+    left: auto;
+    transform: none;
+    align-self: start;
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 0.3rem;
+    padding: 1.4rem 0.85rem 1.25rem;
+    border-top: 0;
+    border-right: 1px solid var(--line);
+    background: var(--surface);
+    backdrop-filter: none;
+  }
+
+  .bottom-nav button {
+    font-size: 0.92rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.55rem;
+    padding: 0.72rem 0.9rem;
+    border-radius: 12px;
+    text-align: left;
+  }
+
+  .bottom-nav button.active {
+    background: var(--soft-strong);
+  }
+
+  .top {
+    align-items: center;
+    margin-bottom: 1.15rem;
+  }
+
+  .top h1 {
+    font-size: 2rem;
+  }
+
+  .top-controls {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.65rem;
+  }
+
+  .hero-value {
+    font-size: 2.5rem;
+  }
+
+  .card {
+    padding: 1.15rem 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .card > .primary {
+    width: auto;
+    min-width: 12rem;
+  }
+
+  .actions {
+    max-width: 36rem;
+  }
+
+  .sheet {
+    align-items: center;
+    justify-items: center;
+    padding: 2rem;
+  }
+
+  .sheet-panel {
+    width: min(32rem, 100%);
+    border-radius: 18px;
+    max-height: 86dvh;
+  }
+
+  .sheet-panel:has(.bill-form) {
+    width: min(46rem, 100%);
+  }
+}
+
+@media (min-width: 1100px) {
+  .home-dash {
+    margin-bottom: 1rem;
+    gap: 1rem;
+  }
+
+  .home-dash:has(> :nth-child(2)) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    align-items: stretch;
+  }
+
+  .home-dash:has(> :nth-child(2)) > .card {
+    height: 100%;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .home-dash .metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 1280px) {
+  .app {
+    grid-template-columns: 16.5rem minmax(0, 1fr);
+  }
+
+  .app-main {
+    padding: 1.75rem 2.5rem 2.5rem;
+  }
+
+  .card > .list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .home-dash .card > .list {
+    grid-template-columns: 1fr;
   }
 }

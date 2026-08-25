@@ -1,4 +1,13 @@
-import type { Bill, Category, Member, MonthlyForecast, Transaction } from './types'
+import type {
+  Bill,
+  BillAmountMode,
+  BillFrequency,
+  BillRecurrence,
+  Category,
+  Member,
+  MonthlyForecast,
+  Transaction,
+} from './types'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
 
@@ -25,6 +34,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listCategories: () => request<Category[]>('/categories'),
+  createCategory: (body: { name: string; description?: string; icon: string }) =>
+    request<Category>('/categories', { method: 'POST', body: JSON.stringify(body) }),
+  updateCategory: (
+    id: number,
+    body: { name: string; description?: string; icon: string },
+  ) => request<Category>(`/categories/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteCategory: (id: number) => request<void>(`/categories/${id}`, { method: 'DELETE' }),
 
   listMembers: () => request<Member[]>('/members'),
   createMember: (body: { name: string; monthly_salary: number }) =>
@@ -37,10 +53,13 @@ export const api = {
   createBill: (body: {
     name: string
     amount: number
+    amount_mode?: BillAmountMode
+    interest_rate?: number
     category_id: number
     member_ids: number[]
     due_day: number
-    recurrence: 'ongoing' | 'until'
+    frequency: BillFrequency
+    recurrence: BillRecurrence
     start_month: string
     end_month?: string | null
     notes?: string
@@ -50,10 +69,13 @@ export const api = {
     body: {
       name: string
       amount: number
+      amount_mode?: BillAmountMode
+      interest_rate?: number
       category_id: number
       member_ids: number[]
       due_day: number
-      recurrence: 'ongoing' | 'until'
+      frequency: BillFrequency
+      recurrence: BillRecurrence
       start_month: string
       end_month?: string | null
       notes?: string
