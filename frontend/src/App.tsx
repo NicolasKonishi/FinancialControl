@@ -26,7 +26,7 @@ import type {
 } from './types'
 import './index.css'
 
-type View = 'home' | 'ledger' | 'bills' | 'family' | 'categories'
+type View = 'home' | 'ledger' | 'bills' | 'family' | 'categories' | 'statistics'
 type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | null
 
 const currency = new Intl.NumberFormat('pt-BR', {
@@ -853,7 +853,14 @@ export default function App() {
           </button>
         </section>
       )}
-
+        {view === 'statistics' && (
+            <section className="card">
+              <h2>Estatisticas</h2>
+              <p className="meta" style={{ marginBottom: '0.85rem' }}>
+                Gráficos
+              </p>
+            </section>
+        )}
       {view === 'categories' && (
         <section className="card">
           <h2>Categorias</h2>
@@ -933,6 +940,9 @@ export default function App() {
         </button>
         <button type="button" className={view === 'family' ? 'active' : ''} onClick={() => setView('family')}>
           Família
+        </button>
+        <button type="button" className={view === 'statistics' ? 'active' : ''} onClick={() => setView('statistics')}>
+          Estatísticas
         </button>
         <button
           type="button"
