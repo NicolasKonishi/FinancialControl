@@ -7,7 +7,12 @@ import { BillEndMonthPicker } from './BillEndMonthPicker'
 import { BillSchedulePicker } from './BillSchedulePicker'
 import { DayDatePicker } from './DayDatePicker'
 import { repeatSummary } from './billSchedule'
-import { billActiveInMonth, billChargeInMonth, parseLocaleNumber } from './billUtils'
+import {
+  billActiveInMonth,
+  billChargeInMonth,
+  billShareForMember,
+  parseLocaleNumber,
+} from './billUtils'
 import {
   CREDIT_CARDS,
   creditCardFromDescription,
@@ -17,6 +22,7 @@ import type {
   Bill,
   BillAmountMode,
   BillFrequency,
+  BillPayment,
   BillRecurrence,
   Category,
   CategoryIcon,
@@ -26,7 +32,7 @@ import type {
 } from './types'
 import './index.css'
 
-type View = 'home' | 'ledger' | 'bills' | 'family' | 'categories' | 'statistics'
+type View = 'home' | 'balance' | 'ledger' | 'bills' | 'family' | 'categories' | 'statistics'
 type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | null
 
 const currency = new Intl.NumberFormat('pt-BR', {
@@ -52,6 +58,15 @@ function formatDate(value: string) {
   return value.slice(0, 10)
 }
 
+function isBillOverdue(dueDay: number, year: number, month: number) {
+  const now = new Date()
+  const viewed = year * 12 + month
+  const current = now.getFullYear() * 12 + (now.getMonth() + 1)
+  if (viewed < current) return true
+  if (viewed > current) return false
+  return dueDay < now.getDate()
+}
+
 export default function App() {
   const now = new Date()
   const [theme, setTheme] = useState<Theme>(() => getPreferredTheme())
@@ -62,6 +77,7 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [bills, setBills] = useState<Bill[]>([])
+  const [billPayments, setBillPayments] = useState<BillPayment[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [forecast, setForecast] = useState<MonthlyForecast | null>(null)
   const [memberFilter, setMemberFilter] = useState<number | 'all'>('all')
@@ -132,6 +148,48 @@ export default function App() {
       .sort((a, b) => a.due_day - b.due_day || a.name.localeCompare(b.name))
   }, [bills, year, month, memberFilter])
 
+  const paidBillIds = useMemo(
+    () => new Set(billPayments.map((payment) => payment.bill_id)),
+    [billPayments],
+  )
+
+  const unpaidBills = useMemo(
+    () => listedBills.filter((bill) => !paidBillIds.has(bill.id)),
+    [listedBills, paidBillIds],
+  )
+  const paidBills = useMemo(
+    () => listedBills.filter((bill) => paidBillIds.has(bill.id)),
+    [listedBills, paidBillIds],
+  )
+  const unpaidTotal = useMemo(() => {
+    return unpaidBills.reduce((sum, bill) => {
+      if (memberFilter === 'all') return sum + billChargeInMonth(bill, year, month)
+      return sum + billShareForMember(bill, memberFilter, year, month)
+    }, 0)
+  }, [unpaidBills, memberFilter, year, month])
+
+  const memberBalances = useMemo(() => {
+    const list = forecast?.by_member ?? []
+    const filtered =
+      memberFilter === 'all' ? list : list.filter((item) => item.member_id === memberFilter)
+    const monthBills = bills.filter((bill) => billActiveInMonth(bill, year, month))
+    return filtered.map((item) => {
+      let paidShare = 0
+      let unpaidShare = 0
+      for (const bill of monthBills) {
+        const share = billShareForMember(bill, item.member_id, year, month)
+        if (paidBillIds.has(bill.id)) paidShare += share
+        else unpaidShare += share
+      }
+      return {
+        ...item,
+        paidShare,
+        unpaidShare,
+        current: item.total_available - item.variable_expense - paidShare,
+      }
+    })
+  }, [forecast, memberFilter, bills, year, month, paidBillIds])
+
   const selectedMemberForecast = useMemo(() => {
     const list = forecast?.by_member ?? []
     if (memberFilter === 'all') return null
@@ -142,17 +200,19 @@ export default function App() {
     setError('')
     setLoading(true)
     try {
-      const [cats, mems, txs, billList, fc] = await Promise.all([
+      const [cats, mems, txs, billList, payments, fc] = await Promise.all([
         api.listCategories(),
         api.listMembers(),
         api.listTransactions(),
         api.listBills(),
+        api.listBillPayments(year, month),
         api.monthlyForecast(year, month),
       ])
       setCategories(cats)
       setMembers(mems)
       setTransactions(txs)
       setBills(billList)
+      setBillPayments(payments)
       setForecast(fc)
 
       const expenseCat = cats.find((c) => c.icon === 'market') ?? cats[0]
@@ -398,6 +458,26 @@ export default function App() {
     }
   }
 
+  async function toggleBillPaid(bill: Bill, paid: boolean) {
+    const previous = billPayments
+    setBillPayments((current) => {
+      if (paid) {
+        if (current.some((item) => item.bill_id === bill.id)) return current
+        return [
+          ...current,
+          { bill_id: bill.id, year, month, paid_at: new Date().toISOString() },
+        ]
+      }
+      return current.filter((item) => item.bill_id !== bill.id)
+    })
+    try {
+      await api.setBillPaid(bill.id, { year, month, paid })
+    } catch (err) {
+      setBillPayments(previous)
+      setError(err instanceof Error ? err.message : 'Erro ao atualizar pagamento')
+    }
+  }
+
   const usedRatio = forecast
     ? Math.min(1, forecast.total_available > 0 ? forecast.projected_expense / forecast.total_available : 0)
     : 0
@@ -465,7 +545,7 @@ export default function App() {
         ))}
       </div>
 
-      {memberFilter !== 'all' && selectedMemberForecast && (
+      {memberFilter !== 'all' && selectedMemberForecast && view !== 'balance' && (
         <section className="card">
           <h2>{selectedMemberForecast.member_name} neste mês</h2>
           <p className={`hero-value ${selectedMemberForecast.remaining < 0 ? 'neg' : 'pos'}`}>
@@ -491,6 +571,156 @@ export default function App() {
             </div>
           </div>
         </section>
+      )}
+
+      {view === 'balance' && (
+        <>
+          <section className="card">
+            <h2>Saldo atual</h2>
+            <p className="meta" style={{ marginBottom: '0.85rem' }}>
+              Salário e extras menos gastos e contas já pagas neste mês.
+            </p>
+            {memberBalances.length === 0 ? (
+              <p className="empty">Adicione pessoas na aba Família para ver o saldo de cada um.</p>
+            ) : (
+              <div className="list">
+                {memberBalances.map((item) => (
+                  <article key={item.member_id} className="row">
+                    <div className="icon-wrap">
+                      <CategoryGlyph icon="salary" />
+                    </div>
+                    <div className="row-main">
+                      <h3>{item.member_name}</h3>
+                      <p>
+                        ainda a pagar {currency.format(item.unpaidShare)} · sobra prevista{' '}
+                        {currency.format(item.remaining)}
+                      </p>
+                    </div>
+                    <div className={`amount ${item.current < 0 ? 'expense' : 'income'}`}>
+                      {currency.format(item.current)}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="card">
+            <h2>Contas do mês</h2>
+            <p className="meta" style={{ marginBottom: '0.85rem' }}>
+              {listedBills.length === 0
+                ? 'Nenhuma conta ativa neste mês.'
+                : `${paidBills.length} de ${listedBills.length} pagas · falta ${currency.format(unpaidTotal)}.`}
+            </p>
+            {listedBills.length > 0 && (
+              <div
+                className={`progress checklist-progress ${
+                  unpaidBills.length === 0 ? '' : unpaidBills.some((bill) => isBillOverdue(bill.due_day, year, month)) ? 'warn' : ''
+                }`}
+              >
+                <i
+                  style={{
+                    width: `${listedBills.length === 0 ? 0 : (paidBills.length / listedBills.length) * 100}%`,
+                  }}
+                />
+              </div>
+            )}
+            {listedBills.length === 0 ? null : (
+              <>
+                <p className="section-label">Ainda faltam</p>
+                {unpaidBills.length === 0 ? (
+                  <p className="empty">Todas as contas deste mês já foram pagas.</p>
+                ) : (
+                  <div className="list">
+                    {unpaidBills.map((bill) => {
+                      const cat = categoryById.get(bill.category_id)
+                      const monthAmount = billChargeInMonth(bill, year, month)
+                      const payers = (bill.member_ids ?? [])
+                        .map((id) => memberById.get(id)?.name)
+                        .filter(Boolean)
+                        .join(', ')
+                      const overdue = isBillOverdue(bill.due_day, year, month)
+                      const ownShare =
+                        memberFilter === 'all'
+                          ? null
+                          : billShareForMember(bill, memberFilter, year, month)
+                      return (
+                        <button
+                          key={bill.id}
+                          type="button"
+                          className={`row checklist-row${overdue ? ' overdue' : ''}`}
+                          aria-pressed="false"
+                          onClick={() => void toggleBillPaid(bill, true)}
+                        >
+                          <span className="check-box" aria-hidden="true" />
+                          <div className="row-main">
+                            <h3>{bill.name}</h3>
+                            <p>
+                              vence dia {bill.due_day}
+                              {overdue ? ' · atrasada' : ''}
+                              {payers ? ` · ${payers}` : ''}
+                              {cat ? ` · ${cat.name}` : ''}
+                              {ownShare != null && (bill.member_ids ?? []).length > 1
+                                ? ` · sua parte ${currency.format(ownShare)}`
+                                : ''}
+                            </p>
+                          </div>
+                          <div className="amount expense">{currency.format(monthAmount)}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                <p className="section-label">Já pagas</p>
+                {paidBills.length === 0 ? (
+                  <p className="empty">Nenhuma conta marcada como paga ainda.</p>
+                ) : (
+                  <div className="list">
+                    {paidBills.map((bill) => {
+                      const cat = categoryById.get(bill.category_id)
+                      const monthAmount = billChargeInMonth(bill, year, month)
+                      const payers = (bill.member_ids ?? [])
+                        .map((id) => memberById.get(id)?.name)
+                        .filter(Boolean)
+                        .join(', ')
+                      const ownShare =
+                        memberFilter === 'all'
+                          ? null
+                          : billShareForMember(bill, memberFilter, year, month)
+                      return (
+                        <button
+                          key={bill.id}
+                          type="button"
+                          className="row checklist-row paid"
+                          aria-pressed="true"
+                          onClick={() => void toggleBillPaid(bill, false)}
+                        >
+                          <span className="check-box on" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                              <path d="M5 12.5 9.5 17 19 7" />
+                            </svg>
+                          </span>
+                          <div className="row-main">
+                            <h3>{bill.name}</h3>
+                            <p>
+                              vence dia {bill.due_day}
+                              {payers ? ` · ${payers}` : ''}
+                              {cat ? ` · ${cat.name}` : ''}
+                              {ownShare != null && (bill.member_ids ?? []).length > 1
+                                ? ` · sua parte ${currency.format(ownShare)}`
+                                : ''}
+                            </p>
+                          </div>
+                          <div className="amount income">{currency.format(monthAmount)}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </>
       )}
 
       {view === 'home' && (
@@ -931,6 +1161,9 @@ export default function App() {
       <nav className="bottom-nav" aria-label="Navegação">
         <button type="button" className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}>
           Início
+        </button>
+        <button type="button" className={view === 'balance' ? 'active' : ''} onClick={() => setView('balance')}>
+          Saldo
         </button>
         <button type="button" className={view === 'ledger' ? 'active' : ''} onClick={() => setView('ledger')}>
           Gastos

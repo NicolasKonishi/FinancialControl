@@ -2,6 +2,7 @@ import type {
   Bill,
   BillAmountMode,
   BillFrequency,
+  BillPayment,
   BillRecurrence,
   Category,
   Member,
@@ -82,6 +83,13 @@ export const api = {
     },
   ) => request<Bill>(`/bills/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteBill: (id: number) => request<void>(`/bills/${id}`, { method: 'DELETE' }),
+  listBillPayments: (year: number, month: number) =>
+    request<BillPayment[]>(`/bills/payments?year=${year}&month=${month}`),
+  setBillPaid: (id: number, body: { year: number; month: number; paid: boolean }) =>
+    request<BillPayment | undefined>(`/bills/${id}/paid`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
 
   listTransactions: () => request<Transaction[]>('/transactions'),
   createTransaction: (body: {

@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,7 @@ type memoryStore struct {
 	transactions map[int]models.Transaction
 	members      map[int]models.Member
 	bills        map[int]models.Bill
+	payments     map[string]models.BillPayment
 	nextCatID    int
 	nextTxID     int
 	nextMemberID int
@@ -33,6 +35,7 @@ func newMemoryStore() *memoryStore {
 		transactions: make(map[int]models.Transaction),
 		members:      make(map[int]models.Member),
 		bills:        make(map[int]models.Bill),
+		payments:     make(map[string]models.BillPayment),
 		nextCatID:    1,
 		nextTxID:     1,
 		nextMemberID: 1,
@@ -304,6 +307,42 @@ func (m *memoryStore) DeleteBill(_ context.Context, id int) error {
 	return nil
 }
 
+func paymentKey(billID, year, month int) string {
+	return fmt.Sprintf("%d-%d-%d", billID, year, month)
+}
+
+func (m *memoryStore) ListBillPayments(_ context.Context, year, month int) ([]models.BillPayment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.BillPayment, 0)
+	for _, payment := range m.payments {
+		if payment.Year == year && payment.Month == month {
+			out = append(out, payment)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryStore) SetBillPaid(_ context.Context, billID, year, month int, paid bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.bills[billID]; !ok {
+		return repository.ErrNotFound
+	}
+	key := paymentKey(billID, year, month)
+	if !paid {
+		delete(m.payments, key)
+		return nil
+	}
+	m.payments[key] = models.BillPayment{
+		BillID: billID,
+		Year:   year,
+		Month:  month,
+		PaidAt: time.Now().UTC(),
+	}
+	return nil
+}
+
 func TestHealth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -491,5 +530,79 @@ func TestCreateOngoingAndUntilBills(t *testing.T) {
 	}
 	if len(shared.MemberIDs) != 2 {
 		t.Fatalf("member_ids len = %d, want 2", len(shared.MemberIDs))
+	}
+}
+
+func TestBillPaidChecklist(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})
+	h := &handlers.Bills{Store: store, Categories: store, Members: store}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
+		`{"name":"Luz","amount":180,"category_id":1,"due_day":15,"frequency":"monthly","recurrence":"ongoing","start_month":"2026-01","member_ids":[]}`,
+	))
+	createRec := httptest.NewRecorder()
+	h.ListOrCreate(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var bill models.Bill
+	if err := json.NewDecoder(createRec.Body).Decode(&bill); err != nil {
+		t.Fatal(err)
+	}
+
+	paidReq := httptest.NewRequest(http.MethodPut, "/bills/1/paid", strings.NewReader(
+		`{"year":2026,"month":8,"paid":true}`,
+	))
+	paidReq.SetPathValue("id", "1")
+	paidRec := httptest.NewRecorder()
+	h.SetPaid(paidRec, paidReq)
+	if paidRec.Code != http.StatusOK {
+		t.Fatalf("paid status = %d body=%s", paidRec.Code, paidRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/bills/payments?year=2026&month=8", nil)
+	listRec := httptest.NewRecorder()
+	h.ListPayments(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var payments []models.BillPayment
+	if err := json.NewDecoder(listRec.Body).Decode(&payments); err != nil {
+		t.Fatal(err)
+	}
+	if len(payments) != 1 || payments[0].BillID != bill.ID {
+		t.Fatalf("payments = %+v, want one for bill %d", payments, bill.ID)
+	}
+
+	unpaidReq := httptest.NewRequest(http.MethodPut, "/bills/1/paid", strings.NewReader(
+		`{"year":2026,"month":8,"paid":false}`,
+	))
+	unpaidReq.SetPathValue("id", "1")
+	unpaidRec := httptest.NewRecorder()
+	h.SetPaid(unpaidRec, unpaidReq)
+	if unpaidRec.Code != http.StatusNoContent {
+		t.Fatalf("unpaid status = %d body=%s", unpaidRec.Code, unpaidRec.Body.String())
+	}
+
+	emptyReq := httptest.NewRequest(http.MethodGet, "/bills/payments?year=2026&month=8", nil)
+	emptyRec := httptest.NewRecorder()
+	h.ListPayments(emptyRec, emptyReq)
+	var empty []models.BillPayment
+	if err := json.NewDecoder(emptyRec.Body).Decode(&empty); err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("payments after unpay = %+v, want empty", empty)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodPut, "/bills/99/paid", strings.NewReader(
+		`{"year":2026,"month":8,"paid":true}`,
+	))
+	missingReq.SetPathValue("id", "99")
+	missingRec := httptest.NewRecorder()
+	h.SetPaid(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing bill status = %d, want 404", missingRec.Code)
 	}
 }

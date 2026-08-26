@@ -137,6 +137,12 @@ export function billActiveInMonth(bill: Bill, year: number, month: number) {
   return billOccurrencesInMonth(bill, year, month) > 0
 }
 
+export function billShareForMember(bill: Bill, memberId: number, year: number, month: number) {
+  const ids = bill.member_ids ?? []
+  if (ids.length === 0 || !ids.includes(memberId)) return 0
+  return billChargeInMonth(bill, year, month) / ids.length
+}
+
 export function billChargeInMonth(bill: Bill, year: number, month: number) {
   const occurrences = billOccurrencesInMonth(bill, year, month)
   if (occurrences === 0) return 0

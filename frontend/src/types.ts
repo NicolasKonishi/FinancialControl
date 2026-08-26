@@ -82,6 +82,13 @@ export type BillFrequency = 'daily' | 'weekdays' | 'weekly' | 'biweekly' | 'mont
 export type BillAmountMode = 'fixed' | 'interest' | 'schedule'
 export type BillRecurrence = 'ongoing' | 'until'
 
+export type BillPayment = {
+  bill_id: number
+  year: number
+  month: number
+  paid_at: string
+}
+
 export type Bill = {
   id: number
   name: string

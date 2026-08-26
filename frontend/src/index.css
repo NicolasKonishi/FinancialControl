@@ -642,6 +642,64 @@ select {
   background: var(--danger);
 }
 
+.checklist-progress {
+  margin-top: 0;
+  margin-bottom: 0.4rem;
+}
+
+.section-label {
+  margin: 0.85rem 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.section-label:first-of-type {
+  margin-top: 0.65rem;
+}
+
+button.row {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.checklist-row.paid h3 {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.checklist-row.overdue {
+  border-color: var(--danger-line);
+}
+
+.check-box {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1.5px solid var(--line);
+  background: var(--input-bg);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.check-box.on {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.check-box svg {
+  width: 14px;
+  height: 14px;
+}
+
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -909,12 +967,17 @@ select {
   bottom: 0;
   width: min(560px, 100%);
   height: var(--nav-h);
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: var(--nav-bg);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bottom-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .bottom-nav button {
@@ -922,11 +985,13 @@ select {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   display: grid;
   place-items: center;
   gap: 0.15rem;
-  padding: 0 0.15rem;
+  padding: 0 0.2rem;
+  flex: 1 0 auto;
+  min-width: 3.55rem;
 }
 
 .icon-picker {
@@ -1054,6 +1119,7 @@ select {
     border-right: 1px solid var(--line);
     background: var(--surface);
     backdrop-filter: none;
+    overflow-x: visible;
   }
 
   .bottom-nav button {

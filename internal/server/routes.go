@@ -49,7 +49,9 @@ func New(deps Dependencies) http.Handler {
 	mux.HandleFunc("DELETE /members/{id}", members.Delete)
 
 	mux.HandleFunc("/bills", bills.ListOrCreate)
+	mux.HandleFunc("GET /bills/payments", bills.ListPayments)
 	mux.HandleFunc("PUT /bills/{id}", bills.Update)
+	mux.HandleFunc("PUT /bills/{id}/paid", bills.SetPaid)
 	mux.HandleFunc("DELETE /bills/{id}", bills.Delete)
 
 	mux.HandleFunc("/transactions", transactions.ListOrCreate)
