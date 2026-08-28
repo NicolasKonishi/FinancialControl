@@ -66,7 +66,12 @@ body {
   font-family: var(--font);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+html.standalone body {
+  overscroll-behavior: none;
 }
 
 button,
@@ -75,11 +80,15 @@ select {
   font: inherit;
 }
 
+button {
+  touch-action: manipulation;
+}
+
 .app {
   width: min(560px, 100%);
   margin: 0 auto;
   min-height: 100dvh;
-  padding: 1rem 1rem calc(var(--nav-h) + 1.25rem);
+  padding: max(1rem, env(safe-area-inset-top)) 1rem calc(var(--nav-h) + 1.25rem + env(safe-area-inset-bottom));
 }
 
 .top {
@@ -722,9 +731,114 @@ button.row {
   font-size: 0.92rem;
 }
 
-.actions button span {
+.actions button.launch-action {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.actions button.launch-action span {
+  color: color-mix(in srgb, var(--on-accent) 72%, transparent);
+}
+
+.ledger-extra {
+  width: 100%;
+  margin-top: 0.45rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+}
+
+.quick-launch {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: var(--overlay);
+  display: grid;
+  align-items: end;
+  padding: 0;
+}
+
+.quick-launch-panel {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  background: var(--bg);
+  border-radius: 22px 22px 0 0;
+  padding: max(1.1rem, env(safe-area-inset-top)) 1.15rem calc(1.25rem + env(safe-area-inset-bottom));
+  min-height: min(34rem, 92dvh);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.quick-launch-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+
+.quick-launch-panel h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.45rem;
+}
+
+.quick-launch-when {
+  margin: 0.35rem 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.92rem;
+  text-transform: capitalize;
+}
+
+.quick-launch-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.quick-launch-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.quick-launch-amount {
+  font-size: 2rem;
+  font-weight: 620;
+  letter-spacing: -0.03em;
+  padding: 0.9rem 0.85rem;
+}
+
+.quick-launch-ok {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-radius: 12px;
+  background: rgba(31, 107, 69, 0.12);
+  color: var(--ok);
+  font-size: 0.88rem;
+}
+
+.quick-launch-hint {
+  margin-top: 1.4rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.quick-launch-hint p {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.quick-launch-hint em {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.quick-launch-hint .ghost {
+  width: auto;
 }
 
 .list {
@@ -960,13 +1074,60 @@ select {
   background: var(--danger-soft);
 }
 
+.install-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.install-banner strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.95rem;
+}
+
+.install-banner p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  max-width: 36rem;
+}
+
+.install-banner em {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.install-banner-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.install-banner-actions .primary,
+.install-banner-actions .ghost {
+  width: auto;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.85rem;
+}
+
 .bottom-nav {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
   bottom: 0;
   width: min(560px, 100%);
-  height: var(--nav-h);
+  height: calc(var(--nav-h) + env(safe-area-inset-bottom));
   display: flex;
   overflow-x: auto;
   scrollbar-width: none;
@@ -1097,7 +1258,7 @@ select {
     grid-row: 1;
     min-width: 0;
     min-height: 100dvh;
-    padding: 1.5rem 2rem 2rem;
+    padding: max(1.5rem, env(safe-area-inset-top)) max(2rem, env(safe-area-inset-right)) 2rem 2rem;
   }
 
   .bottom-nav {
@@ -1114,7 +1275,7 @@ select {
     flex-direction: column;
     justify-content: flex-start;
     gap: 0.3rem;
-    padding: 1.4rem 0.85rem 1.25rem;
+    padding: max(1.4rem, env(safe-area-inset-top)) 0.85rem 1.25rem max(0.85rem, env(safe-area-inset-left));
     border-top: 0;
     border-right: 1px solid var(--line);
     background: var(--surface);
@@ -1180,6 +1341,19 @@ select {
     width: min(32rem, 100%);
     border-radius: 18px;
     max-height: 86dvh;
+  }
+
+  .quick-launch {
+    align-items: center;
+    padding: 2rem;
+  }
+
+  .quick-launch-panel {
+    width: min(28rem, 100%);
+    border-radius: 22px;
+    min-height: auto;
+    border-bottom: 1px solid var(--line);
+    padding: 1.25rem 1.25rem 1.35rem;
   }
 
   .sheet-panel:has(.bill-form) {

@@ -10,7 +10,19 @@ import type {
   Transaction,
 } from './types'
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
+function resolveApiUrl() {
+  const fromEnv = import.meta.env.VITE_API_URL as string | undefined
+  if (fromEnv) return fromEnv.replace(/\/$/, '')
+  if (typeof window === 'undefined') return 'http://localhost:8080'
+  const { protocol, hostname } = window.location
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://localhost:8080'
+  }
+  // Phone on the same Wi-Fi: UI at :5173, API at :8080 on this machine.
+  return `${protocol}//${hostname}:8080`
+}
+
+const API_URL = resolveApiUrl()
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {

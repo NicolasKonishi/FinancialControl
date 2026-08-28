@@ -1,6 +1,8 @@
 /** Credit cards / wallets used to tag expenses. */
 export const CREDIT_CARDS = [
   { id: '', label: 'Sem cartão (à vista)' },
+  { id: 'pix', label: 'Pix' },
+  { id: 'debito', label: 'Débito' },
   { id: 'nubank', label: 'Nubank' },
   { id: 'bb', label: 'Banco do Brasil' },
   { id: 'mercado-livre', label: 'Mercado Livre' },

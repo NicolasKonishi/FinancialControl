@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from './api'
 import { CATEGORY_ICONS, CategoryGlyph, iconLabel, PencilIcon, TrashIcon } from './icons'
@@ -18,6 +18,18 @@ import {
   creditCardFromDescription,
   creditCardLabel,
 } from './creditCards'
+import { InstallBanner } from './InstallBanner'
+import { createInstallHint, type InstallHint } from './pwaInstall'
+import {
+  clearQuickAdd,
+  consumeQuickAdd,
+  isQuickLaunchUrl,
+  matchCategoryId,
+  matchMemberId,
+  nowLocal,
+  setQuickLaunchUrl,
+} from './quickAdd'
+import { QuickLaunch } from './QuickLaunch'
 import type {
   Bill,
   BillAmountMode,
@@ -34,6 +46,14 @@ import './index.css'
 
 type View = 'home' | 'balance' | 'ledger' | 'bills' | 'family' | 'categories' | 'statistics'
 type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | null
+type TxPrefill = {
+  category_id?: number
+  member_id?: number
+  description?: string
+  amount?: string
+  date?: string
+  credit_card?: string
+}
 
 const currency = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
@@ -46,7 +66,22 @@ const monthLabel = new Intl.DateTimeFormat('pt-BR', {
 })
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+  return nowLocal().date
+}
+
+function formatWhen(date: string, createdAt?: string) {
+  if (createdAt) {
+    const parsed = new Date(createdAt)
+    if (!Number.isNaN(parsed.getTime())) {
+      return new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(parsed)
+    }
+  }
+  return date.slice(0, 10)
 }
 
 function currentMonthKey() {
@@ -88,6 +123,17 @@ export default function App() {
     message: string
     onConfirm: () => Promise<void>
   } | null>(null)
+
+  const [installHint, setInstallHint] = useState<InstallHint>({
+    visible: false,
+    isIOS: false,
+    canPrompt: false,
+  })
+  const installCtrl = useRef<ReturnType<typeof createInstallHint> | null>(null)
+  const [quickLaunch, setQuickLaunch] = useState(() =>
+    typeof window !== 'undefined' ? isQuickLaunchUrl() : false,
+  )
+  const [quickLaunchSaving, setQuickLaunchSaving] = useState(false)
 
   const [sheet, setSheet] = useState<SheetMode>(null)
   const [editingTxId, setEditingTxId] = useState<number | null>(null)
@@ -263,6 +309,49 @@ export default function App() {
     void refresh()
   }, [year, month])
 
+  useEffect(() => {
+    installCtrl.current = createInstallHint(setInstallHint)
+    return () => installCtrl.current?.stop()
+  }, [])
+
+  useEffect(() => {
+    const sync = () => setQuickLaunch(isQuickLaunchUrl())
+    sync()
+    window.addEventListener('popstate', sync)
+    window.addEventListener('hashchange', sync)
+    return () => {
+      window.removeEventListener('popstate', sync)
+      window.removeEventListener('hashchange', sync)
+    }
+  }, [])
+
+  useEffect(() => {
+    document.title = quickLaunch ? 'Lançar no Fluxo' : 'Fluxo'
+  }, [quickLaunch])
+
+  useEffect(() => {
+    if (loading) return
+    const draft = consumeQuickAdd()
+    if (!draft) return
+
+    const fallback =
+      draft.mode === 'freelance'
+        ? (categories.find((c) => c.icon === 'freelance') ?? categories[0])
+        : draft.mode === 'income'
+          ? (categories.find((c) => c.icon === 'salary') ?? categories[0])
+          : (categories.find((c) => c.icon === 'market' || c.icon === 'food') ?? categories[0])
+
+    openSheet(draft.mode, {
+      category_id: matchCategoryId(categories, draft.categoryQuery, fallback?.id || 0),
+      member_id: matchMemberId(members, draft.memberQuery, members[0]?.id || 0),
+      description: draft.description,
+      amount: draft.amount,
+      date: draft.date || todayISO(),
+      credit_card: draft.credit_card,
+    })
+    clearQuickAdd()
+  }, [loading])
+
   function toggleTheme() {
     const next: Theme = theme === 'dark' ? 'light' : 'dark'
     setTheme(next)
@@ -274,7 +363,59 @@ export default function App() {
     setMonth(date.getUTCMonth() + 1)
   }
 
-  function openSheet(mode: SheetMode) {
+  function openQuickLaunch() {
+    if (!isQuickLaunchUrl()) setQuickLaunchUrl(true)
+    setQuickLaunch(true)
+    setError('')
+  }
+
+  function closeQuickLaunch() {
+    if (isQuickLaunchUrl()) setQuickLaunchUrl(false)
+    setQuickLaunch(false)
+  }
+
+  async function submitQuickLaunch(place: string, amountText: string) {
+    const amount = parseLocaleNumber(amountText)
+    if (!place.trim()) {
+      setError('Informe o lugar.')
+      return false
+    }
+    if (!(amount > 0)) {
+      setError('Informe um valor válido.')
+      return false
+    }
+    const stamp = nowLocal()
+    const category =
+      categories.find((c) => c.icon === 'market' || c.icon === 'food' || c.icon === 'shopping') ??
+      categories[0]
+    if (!category) {
+      setError('Crie uma categoria antes de lançar.')
+      return false
+    }
+    setQuickLaunchSaving(true)
+    setError('')
+    try {
+      await api.createTransaction({
+        category_id: category.id,
+        member_id: members[0]?.id || null,
+        type: 'expense',
+        description: place.trim(),
+        amount,
+        date: stamp.date,
+      })
+      setYear(stamp.year)
+      setMonth(stamp.month)
+      await refresh()
+      return true
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao lançar')
+      return false
+    } finally {
+      setQuickLaunchSaving(false)
+    }
+  }
+
+  function openSheet(mode: SheetMode, prefill?: TxPrefill) {
     setEditingTxId(null)
     setEditingMemberId(null)
     setEditingBillId(null)
@@ -303,32 +444,33 @@ export default function App() {
     } else if (mode === 'freelance') {
       const freelance = categories.find((c) => c.icon === 'freelance') ?? categories[0]
       setTxForm({
-        category_id: freelance?.id || 0,
-        member_id: members[0]?.id || 0,
-        description: 'Freelancer',
-        amount: '',
-        date: todayISO(),
-        credit_card: '',
+        category_id: prefill?.category_id || freelance?.id || 0,
+        member_id: prefill?.member_id || members[0]?.id || 0,
+        description: prefill?.description || 'Freelancer',
+        amount: prefill?.amount ?? '',
+        date: prefill?.date || todayISO(),
+        credit_card: prefill?.credit_card ?? '',
       })
     } else if (mode === 'income') {
       const salary = categories.find((c) => c.icon === 'salary') ?? categories[0]
       setTxForm({
-        category_id: salary?.id || 0,
-        member_id: members[0]?.id || 0,
-        description: 'Entrada extra',
-        amount: '',
-        date: todayISO(),
-        credit_card: '',
+        category_id: prefill?.category_id || salary?.id || 0,
+        member_id: prefill?.member_id || members[0]?.id || 0,
+        description: prefill?.description || 'Entrada extra',
+        amount: prefill?.amount ?? '',
+        date: prefill?.date || todayISO(),
+        credit_card: prefill?.credit_card ?? '',
       })
     } else if (mode === 'expense') {
       const market = categories.find((c) => c.icon === 'market' || c.icon === 'food') ?? categories[0]
+      const credit_card = prefill?.credit_card ?? ''
       setTxForm({
-        category_id: market?.id || 0,
-        member_id: members[0]?.id || 0,
-        description: '',
-        amount: '',
-        date: todayISO(),
-        credit_card: '',
+        category_id: prefill?.category_id || market?.id || 0,
+        member_id: prefill?.member_id || members[0]?.id || 0,
+        description: prefill?.description || creditCardLabel(credit_card),
+        amount: prefill?.amount ?? '',
+        date: prefill?.date || todayISO(),
+        credit_card,
       })
     }
     setSheet(mode)
@@ -522,7 +664,12 @@ export default function App() {
         </div>
       </header>
 
-      {error ? <div className="error">{error}</div> : null}
+      {error && !quickLaunch ? <div className="error">{error}</div> : null}
+      <InstallBanner
+        hint={installHint}
+        onInstall={() => void installCtrl.current?.prompt()}
+        onDismiss={() => installCtrl.current?.dismiss()}
+      />
       {loading ? <div className="empty">Carregando…</div> : null}
 
       <div className="filter-bar" aria-label="Filtro por pessoa">
@@ -792,9 +939,9 @@ export default function App() {
           )}
 
           <div className="actions">
-            <button type="button" onClick={() => openSheet('expense')}>
-              <strong>Saída</strong>
-              <span>gasto</span>
+            <button type="button" className="launch-action" onClick={openQuickLaunch}>
+              <strong>Lançar</strong>
+              <span>lugar e valor</span>
             </button>
             <button type="button" onClick={() => openSheet('income')}>
               <strong>Entrada</strong>
@@ -822,7 +969,7 @@ export default function App() {
                       <div>
                         <h3>{tx.description}</h3>
                         <p>
-                          {cat?.name ?? 'Categoria'} · {formatDate(tx.date)}
+                          {cat?.name ?? 'Categoria'} · {formatWhen(tx.date, tx.created_at)}
                         </p>
                       </div>
                       <div className={`amount ${tx.type}`}>
@@ -862,7 +1009,7 @@ export default function App() {
                       <h3>{tx.description}</h3>
                       <p>
                         {cat?.name ?? 'Categoria'}
-                        {member ? ` · ${member.name}` : ''} · {formatDate(tx.date)}
+                        {member ? ` · ${member.name}` : ''} · {formatWhen(tx.date, tx.created_at)}
                       </p>
                     </div>
                     <div className="row-side">
@@ -916,8 +1063,11 @@ export default function App() {
               })}
             </div>
           )}
-          <button type="button" className="primary" onClick={() => openSheet('expense')}>
-            Novo lançamento
+          <button type="button" className="primary" onClick={openQuickLaunch}>
+            Lançar lugar e valor
+          </button>
+          <button type="button" className="ghost ledger-extra" onClick={() => openSheet('expense')}>
+            Saída completa
           </button>
         </section>
       )}
@@ -1457,7 +1607,7 @@ export default function App() {
                   <div className="bill-form-fields">
                     {sheet === 'expense' ? (
                       <label>
-                        Cartão de crédito
+                        Pagamento
                         <select
                           value={txForm.credit_card}
                           onChange={(e) => {
@@ -1497,7 +1647,7 @@ export default function App() {
                         onChange={(e) => setTxForm((p) => ({ ...p, description: e.target.value }))}
                         placeholder={
                           sheet === 'expense'
-                            ? 'Mercado, almoço… ou escolha o cartão'
+                            ? 'Mercado, Pix, almoço…'
                             : 'Pagamento, freelance…'
                         }
                       />
@@ -1554,6 +1704,14 @@ export default function App() {
           </div>
         </div>
       )}
+      {quickLaunch ? (
+        <QuickLaunch
+          saving={quickLaunchSaving}
+          error={error}
+          onSave={submitQuickLaunch}
+          onClose={closeQuickLaunch}
+        />
+      ) : null}
       {confirmDelete ? (
         <div
           className="sheet"

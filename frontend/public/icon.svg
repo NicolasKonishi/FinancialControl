@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Fluxo">
+  <rect width="512" height="512" fill="#1c1a17"/>
+  <rect x="102" y="102" width="84" height="308" rx="24" fill="#f3f1ec"/>
+  <rect x="102" y="102" width="292" height="72" rx="24" fill="#f3f1ec"/>
+  <rect x="102" y="232" width="210" height="72" rx="24" fill="#f3f1ec"/>
+  <rect x="392" y="392" width="46" height="46" rx="23" fill="#1f6b45"/>
+</svg>
