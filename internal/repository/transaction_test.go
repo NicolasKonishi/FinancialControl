@@ -39,6 +39,10 @@ func TestCreateTransactionDebitsWalletWithoutDeadlock(t *testing.T) {
 			kind TEXT NOT NULL,
 			member_id INTEGER REFERENCES members(id),
 			balance REAL NOT NULL DEFAULT 0,
+			closing_day INTEGER,
+			due_day INTEGER,
+			credit_limit REAL NOT NULL DEFAULT 0,
+			invoice_balance REAL NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
 		);
 		CREATE TABLE transactions (
@@ -98,5 +102,131 @@ func TestCreateTransactionDebitsWalletWithoutDeadlock(t *testing.T) {
 	}
 	if updated.Balance != 420 {
 		t.Fatalf("wallet after expense = %v, want 420", updated.Balance)
+	}
+}
+
+func TestCreditCardExpenseRaisesInvoiceAndPayInvoiceDebitsChecking(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	db, err := database.Connect(ctx, "file:txcredit?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	schema := `
+		CREATE TABLE members (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			monthly_salary REAL NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE categories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			icon TEXT NOT NULL DEFAULT 'other',
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE wallets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			member_id INTEGER REFERENCES members(id),
+			balance REAL NOT NULL DEFAULT 0,
+			closing_day INTEGER,
+			due_day INTEGER,
+			credit_limit REAL NOT NULL DEFAULT 0,
+			invoice_balance REAL NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE transactions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			category_id INTEGER NOT NULL REFERENCES categories(id),
+			member_id INTEGER REFERENCES members(id),
+			wallet_id INTEGER REFERENCES wallets(id),
+			type TEXT NOT NULL,
+			description TEXT NOT NULL,
+			amount REAL NOT NULL,
+			date TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);
+	`
+	if _, err := db.ExecContext(ctx, schema); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	store := NewStore(db)
+	member, err := store.CreateMember(ctx, models.CreateMemberInput{Name: "Ana", MonthlySalary: 3000})
+	if err != nil {
+		t.Fatalf("member: %v", err)
+	}
+	category, err := store.CreateCategory(ctx, models.CreateCategoryInput{Name: "Mercado", Icon: "market"})
+	if err != nil {
+		t.Fatalf("category: %v", err)
+	}
+	closing, due := 10, 17
+	card, err := store.CreateWallet(ctx, models.CreateWalletInput{
+		Name:        "Nubank",
+		Kind:        models.WalletCredit,
+		MemberID:    &member.ID,
+		ClosingDay:  &closing,
+		DueDay:      &due,
+		CreditLimit: 5000,
+	})
+	if err != nil {
+		t.Fatalf("card: %v", err)
+	}
+	checking, err := store.CreateWallet(ctx, models.CreateWalletInput{
+		Name:     "Pix",
+		Kind:     models.WalletChecking,
+		MemberID: &member.ID,
+		Balance:  1000,
+	})
+	if err != nil {
+		t.Fatalf("checking: %v", err)
+	}
+
+	_, err = store.CreateTransaction(ctx, models.Transaction{
+		CategoryID:  category.ID,
+		MemberID:    &member.ID,
+		WalletID:    &card.ID,
+		Type:        models.TransactionTypeExpense,
+		Description: "Mercado",
+		Amount:      200,
+		Date:        time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("create transaction: %v", err)
+	}
+
+	card, err = store.GetWalletByID(ctx, card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if card.InvoiceBalance != 200 {
+		t.Fatalf("invoice = %v, want 200", card.InvoiceBalance)
+	}
+	if card.Balance != 0 {
+		t.Fatalf("credit cash balance = %v, want 0", card.Balance)
+	}
+
+	paid, err := store.PayWalletInvoice(ctx, card.ID, models.PayInvoiceInput{
+		Amount:       80,
+		FromWalletID: checking.ID,
+	})
+	if err != nil {
+		t.Fatalf("pay invoice: %v", err)
+	}
+	if paid.InvoiceBalance != 120 {
+		t.Fatalf("invoice after pay = %v, want 120", paid.InvoiceBalance)
+	}
+	checking, err = store.GetWalletByID(ctx, checking.ID)
+	if err != nil {
+		t.Fatalf("get checking: %v", err)
+	}
+	if checking.Balance != 920 {
+		t.Fatalf("checking after pay = %v, want 920", checking.Balance)
 	}
 }

@@ -568,6 +568,312 @@ button {
   grid-column: 1 / -1;
 }
 
+.top-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.85rem;
+}
+
+.top-filter-row .filter-bar {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.home-quick {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.home-quick-btn {
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.home-quick-btn:hover {
+  background: var(--soft-strong);
+}
+
+.account-group {
+  margin-bottom: 1.15rem;
+}
+
+.account-group:last-child {
+  margin-bottom: 0;
+}
+
+.account-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.account-group-actions .ghost {
+  width: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+.account-card-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.account-card-row .row {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-card-row > .ghost {
+  width: auto;
+  flex-shrink: 0;
+  padding: 0.55rem 0.7rem;
+}
+
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 9.5rem;
+  padding: 0.25rem 0.55rem 0.25rem 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.account-chip-avatar,
+.account-login-avatar {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.75rem;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.account-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.account-login {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.app.app--auth {
+  width: 100%;
+  max-width: none;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  grid-template-columns: none;
+}
+
+.app.app--auth .empty {
+  text-align: center;
+}
+
+.account-login-panel {
+  width: min(26rem, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+
+.account-login-brand {
+  text-align: center;
+  margin-bottom: 1.25rem;
+}
+
+.account-login-brand .glyph {
+  width: 2rem;
+  height: 2rem;
+  margin: 0 auto 0.65rem;
+  color: var(--ink);
+}
+
+.account-login-brand h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.7rem;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+}
+
+.account-login-brand p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.account-login-section {
+  margin-top: 1rem;
+}
+
+.account-login-section h2 {
+  margin: 0 0 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.account-login-list,
+.account-switch-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.account-login-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  text-align: left;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.account-login-row:hover,
+.account-login-row.active {
+  border-color: var(--ink);
+  background: var(--soft-strong);
+}
+
+.account-login-row-main {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.account-login-row-main strong {
+  font-size: 0.95rem;
+}
+
+.account-login-row-main span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.account-login-remember {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.account-login-add {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.account-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.account-switch-row .account-login-row {
+  flex: 1;
+}
+
+.split-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.45rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.split-toggle input {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.account-group {
+  margin-bottom: 1.15rem;
+}
+
+.account-group:last-child {
+  margin-bottom: 0;
+}
+
+.account-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.account-group-actions .ghost {
+  width: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+.account-card-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.account-card-row .row {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-card-row > .ghost {
+  width: auto;
+  flex-shrink: 0;
+  padding: 0.55rem 0.7rem;
+}
+
 .forecast-value {
   font-family: var(--display);
   font-size: clamp(1.25rem, 4.5vw, 1.7rem);
@@ -733,7 +1039,7 @@ button.row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
-  margin-bottom: 0.85rem;
+  margin: 0.85rem;
 }
 
 .actions button {
@@ -1442,6 +1748,11 @@ select {
     display: grid;
     grid-template-columns: 15.5rem minmax(0, 1fr);
     min-height: 100dvh;
+  }
+
+  .app.app--auth {
+    grid-template-columns: none;
+    place-items: center;
   }
 
   .app-main {

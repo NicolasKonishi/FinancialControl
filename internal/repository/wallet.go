@@ -5,18 +5,21 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/NicolasKonishi/FinancialControl/internal/models"
 )
 
-// CreateWallet inserts an account, box, or benefit balance.
+const walletSelect = `id, name, kind, member_id, balance, closing_day, due_day, credit_limit, invoice_balance, created_at`
+
+// CreateWallet inserts an account, box, benefit, or credit card.
 func (s *Store) CreateWallet(ctx context.Context, input models.CreateWalletInput) (models.Wallet, error) {
 	const query = `
-		INSERT INTO wallets (name, kind, member_id, balance, created_at)
-		VALUES (?, ?, ?, ?, ?)
-		RETURNING id, name, kind, member_id, balance, created_at
+		INSERT INTO wallets (name, kind, member_id, balance, closing_day, due_day, credit_limit, invoice_balance, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING ` + walletSelect + `
 	`
 
 	now := formatDateTime(time.Now())
@@ -27,6 +30,10 @@ func (s *Store) CreateWallet(ctx context.Context, input models.CreateWalletInput
 		models.NormalizeWalletKind(input.Kind),
 		nullInt(input.MemberID),
 		input.Balance,
+		nullInt(input.ClosingDay),
+		nullInt(input.DueDay),
+		input.CreditLimit,
+		input.InvoiceBalance,
 		now,
 	))
 	if err != nil {
@@ -38,7 +45,7 @@ func (s *Store) CreateWallet(ctx context.Context, input models.CreateWalletInput
 // ListWallets returns all wallets.
 func (s *Store) ListWallets(ctx context.Context) ([]models.Wallet, error) {
 	const query = `
-		SELECT id, name, kind, member_id, balance, created_at
+		SELECT ` + walletSelect + `
 		FROM wallets
 		ORDER BY CASE WHEN member_id IS NULL THEN 0 ELSE 1 END, member_id, id
 	`
@@ -66,7 +73,7 @@ func (s *Store) ListWallets(ctx context.Context) ([]models.Wallet, error) {
 // GetWalletByID returns one wallet or ErrNotFound.
 func (s *Store) GetWalletByID(ctx context.Context, id int) (models.Wallet, error) {
 	const query = `
-		SELECT id, name, kind, member_id, balance, created_at
+		SELECT ` + walletSelect + `
 		FROM wallets
 		WHERE id = ?
 	`
@@ -85,9 +92,9 @@ func (s *Store) GetWalletByID(ctx context.Context, id int) (models.Wallet, error
 func (s *Store) UpdateWallet(ctx context.Context, id int, input models.UpdateWalletInput) (models.Wallet, error) {
 	const query = `
 		UPDATE wallets
-		SET name = ?, kind = ?, member_id = ?, balance = ?
+		SET name = ?, kind = ?, member_id = ?, balance = ?, closing_day = ?, due_day = ?, credit_limit = ?, invoice_balance = ?
 		WHERE id = ?
-		RETURNING id, name, kind, member_id, balance, created_at
+		RETURNING ` + walletSelect + `
 	`
 
 	wallet, err := scanWallet(s.db.QueryRowContext(
@@ -97,6 +104,10 @@ func (s *Store) UpdateWallet(ctx context.Context, id int, input models.UpdateWal
 		models.NormalizeWalletKind(input.Kind),
 		nullInt(input.MemberID),
 		input.Balance,
+		nullInt(input.ClosingDay),
+		nullInt(input.DueDay),
+		input.CreditLimit,
+		input.InvoiceBalance,
 		id,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -124,18 +135,83 @@ func (s *Store) DeleteWallet(ctx context.Context, id int) error {
 	return nil
 }
 
+// PayWalletInvoice reduces a credit-card invoice by debiting another account.
+func (s *Store) PayWalletInvoice(ctx context.Context, creditWalletID int, input models.PayInvoiceInput) (models.Wallet, error) {
+	amount := math.Round(input.Amount*100) / 100
+	if !(amount > 0) {
+		return models.Wallet{}, ErrInvalidAmount
+	}
+	if input.FromWalletID < 1 || input.FromWalletID == creditWalletID {
+		return models.Wallet{}, ErrInvalidAmount
+	}
+
+	credit, err := s.GetWalletByID(ctx, creditWalletID)
+	if err != nil {
+		return models.Wallet{}, err
+	}
+	if !models.IsCredit(credit.Kind) {
+		return models.Wallet{}, ErrNotCredit
+	}
+	if credit.InvoiceBalance <= 0 {
+		return models.Wallet{}, ErrInvoiceEmpty
+	}
+	if amount > credit.InvoiceBalance {
+		amount = credit.InvoiceBalance
+	}
+
+	from, err := s.GetWalletByID(ctx, input.FromWalletID)
+	if err != nil {
+		return models.Wallet{}, err
+	}
+	if models.IsCredit(from.Kind) {
+		return models.Wallet{}, ErrNotCredit
+	}
+
+	dbTx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Wallet{}, fmt.Errorf("begin pay invoice: %w", err)
+	}
+	defer dbTx.Rollback()
+
+	if err := adjustWalletTx(ctx, dbTx, from.ID, -amount); err != nil {
+		return models.Wallet{}, err
+	}
+	if err := adjustWalletTx(ctx, dbTx, credit.ID, amount); err != nil {
+		return models.Wallet{}, err
+	}
+	if err := dbTx.Commit(); err != nil {
+		return models.Wallet{}, fmt.Errorf("commit pay invoice: %w", err)
+	}
+	return s.GetWalletByID(ctx, creditWalletID)
+}
+
 func scanWallet(row interface {
 	Scan(dest ...any) error
 }) (models.Wallet, error) {
 	var (
 		wallet    models.Wallet
 		memberID  sql.NullInt64
+		closing   sql.NullInt64
+		due       sql.NullInt64
 		createdAt string
 	)
-	if err := row.Scan(&wallet.ID, &wallet.Name, &wallet.Kind, &memberID, &wallet.Balance, &createdAt); err != nil {
+	if err := row.Scan(
+		&wallet.ID,
+		&wallet.Name,
+		&wallet.Kind,
+		&memberID,
+		&wallet.Balance,
+		&closing,
+		&due,
+		&wallet.CreditLimit,
+		&wallet.InvoiceBalance,
+		&createdAt,
+	); err != nil {
 		return models.Wallet{}, err
 	}
 	wallet.MemberID = fromNullInt(memberID)
+	wallet.ClosingDay = fromNullInt(closing)
+	wallet.DueDay = fromNullInt(due)
 	parsed, err := parseDateTime(createdAt)
 	if err != nil {
 		return models.Wallet{}, err

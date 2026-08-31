@@ -28,10 +28,21 @@ func parsePositiveID(w http.ResponseWriter, raw string) (int, bool) {
 }
 
 func writeStoreError(w http.ResponseWriter, err error, notFoundMessage string) {
-	if errors.Is(err, repository.ErrNotFound) {
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
 		http.Error(w, notFoundMessage, http.StatusNotFound)
-		return
+	case errors.Is(err, repository.ErrWalletOwner):
+		http.Error(w, "wallet does not belong to member", http.StatusBadRequest)
+	case errors.Is(err, repository.ErrNoWallet):
+		http.Error(w, "member has no wallet", http.StatusBadRequest)
+	case errors.Is(err, repository.ErrNotCredit):
+		http.Error(w, "wallet is not a credit card", http.StatusBadRequest)
+	case errors.Is(err, repository.ErrInvalidAmount):
+		http.Error(w, "invalid amount", http.StatusBadRequest)
+	case errors.Is(err, repository.ErrInvoiceEmpty):
+		http.Error(w, "invoice is already paid", http.StatusBadRequest)
+	default:
+		log.Printf("store error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
-	log.Printf("store error: %v", err)
-	http.Error(w, "internal server error", http.StatusInternalServerError)
 }

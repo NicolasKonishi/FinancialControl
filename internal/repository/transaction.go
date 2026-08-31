@@ -193,7 +193,9 @@ func (s *Store) validateTxWallet(ctx context.Context, memberID, walletID *int) e
 		return err
 	}
 	if memberID != nil && wallet.MemberID != nil && *wallet.MemberID != *memberID {
-		return ErrWalletOwner
+		if !models.IsCompanyWallet(wallet.Kind) {
+			return ErrWalletOwner
+		}
 	}
 	return nil
 }

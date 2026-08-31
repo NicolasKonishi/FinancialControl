@@ -81,6 +81,7 @@ func New(deps Dependencies) http.Handler {
 	mux.HandleFunc("/wallets", wallets.ListOrCreate)
 	mux.HandleFunc("PUT /wallets/{id}", wallets.Update)
 	mux.HandleFunc("DELETE /wallets/{id}", wallets.Delete)
+	mux.HandleFunc("POST /wallets/{id}/pay-invoice", wallets.PayInvoice)
 
 	mux.HandleFunc("GET /analysis/monthly", analysisHandler.Monthly)
 	mux.HandleFunc("GET /forecast/monthly", forecast.Monthly)

@@ -18,6 +18,7 @@ type WalletStore interface {
 	GetWalletByID(ctx context.Context, id int) (models.Wallet, error)
 	UpdateWallet(ctx context.Context, id int, input models.UpdateWalletInput) (models.Wallet, error)
 	DeleteWallet(ctx context.Context, id int) error
+	PayWalletInvoice(ctx context.Context, creditWalletID int, input models.PayInvoiceInput) (models.Wallet, error)
 }
 
 // Wallets handles account/box balance HTTP endpoints.
@@ -97,6 +98,25 @@ func (h *Wallets) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PayInvoice handles POST /wallets/{id}/pay-invoice.
+func (h *Wallets) PayInvoice(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePositiveID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var input models.PayInvoiceInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	updated, err := h.Store.PayWalletInvoice(r.Context(), id, input)
+	if err != nil {
+		writeStoreError(w, err, "wallet not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (h *Wallets) validate(w http.ResponseWriter, r *http.Request, input models.CreateWalletInput) (models.CreateWalletInput, bool) {
 	if strings.TrimSpace(input.Name) == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
@@ -117,10 +137,30 @@ func (h *Wallets) validate(w http.ResponseWriter, r *http.Request, input models.
 			return models.CreateWalletInput{}, false
 		}
 	}
+	if !models.ValidCardDay(input.ClosingDay) || !models.ValidCardDay(input.DueDay) {
+		http.Error(w, "closing_day and due_day must be between 1 and 31", http.StatusBadRequest)
+		return models.CreateWalletInput{}, false
+	}
+	if input.CreditLimit < 0 || input.InvoiceBalance < 0 {
+		http.Error(w, "credit_limit and invoice_balance must be zero or greater", http.StatusBadRequest)
+		return models.CreateWalletInput{}, false
+	}
+	if !models.IsCredit(kind) {
+		input.ClosingDay = nil
+		input.DueDay = nil
+		input.CreditLimit = 0
+		input.InvoiceBalance = 0
+	} else {
+		input.Balance = 0
+	}
 	return models.CreateWalletInput{
-		Name:     strings.TrimSpace(input.Name),
-		Kind:     kind,
-		MemberID: input.MemberID,
-		Balance:  input.Balance,
+		Name:           strings.TrimSpace(input.Name),
+		Kind:           kind,
+		MemberID:       input.MemberID,
+		Balance:        input.Balance,
+		ClosingDay:     input.ClosingDay,
+		DueDay:         input.DueDay,
+		CreditLimit:    input.CreditLimit,
+		InvoiceBalance: input.InvoiceBalance,
 	}, true
 }

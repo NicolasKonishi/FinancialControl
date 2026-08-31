@@ -30,6 +30,7 @@ type Bill struct {
 	InterestRate float64   `json:"interest_rate"`
 	CategoryID   int       `json:"category_id"`
 	MemberIDs    []int     `json:"member_ids"`
+	WalletID     *int      `json:"wallet_id"`
 	DueDay       int       `json:"due_day"`
 	Frequency    string    `json:"frequency"`
 	Recurrence   string    `json:"recurrence"`
@@ -47,6 +48,7 @@ type CreateBillInput struct {
 	InterestRate float64 `json:"interest_rate"`
 	CategoryID   int     `json:"category_id"`
 	MemberIDs    []int   `json:"member_ids"`
+	WalletID     *int    `json:"wallet_id"`
 	DueDay       int     `json:"due_day"`
 	Frequency    string  `json:"frequency"`
 	Recurrence   string  `json:"recurrence"`
@@ -63,6 +65,7 @@ type UpdateBillInput struct {
 	InterestRate float64 `json:"interest_rate"`
 	CategoryID   int     `json:"category_id"`
 	MemberIDs    []int   `json:"member_ids"`
+	WalletID     *int    `json:"wallet_id"`
 	DueDay       int     `json:"due_day"`
 	Frequency    string  `json:"frequency"`
 	Recurrence   string  `json:"recurrence"`

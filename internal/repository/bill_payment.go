@@ -155,13 +155,15 @@ func (s *Store) resolvePayerWallet(ctx context.Context, memberID int, walletID *
 			return models.Wallet{}, err
 		}
 		if wallet.MemberID == nil || *wallet.MemberID != memberID {
-			return models.Wallet{}, ErrWalletOwner
+			if !models.IsCompanyWallet(wallet.Kind) {
+				return models.Wallet{}, ErrWalletOwner
+			}
 		}
 		return wallet, nil
 	}
 
 	const query = `
-		SELECT id, name, kind, member_id, balance, created_at
+		SELECT ` + walletSelect + `
 		FROM wallets
 		WHERE member_id = ?
 		ORDER BY id ASC
@@ -193,16 +195,34 @@ func (s *Store) resolvePayerWallet(ctx context.Context, memberID int, walletID *
 }
 
 func adjustWalletTx(ctx context.Context, tx *sql.Tx, walletID int, delta float64) error {
-	var balance float64
-	err := tx.QueryRowContext(ctx, `SELECT balance FROM wallets WHERE id = ?`, walletID).Scan(&balance)
+	var (
+		kind    string
+		balance float64
+		invoice float64
+	)
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT kind, balance, invoice_balance FROM wallets WHERE id = ?`,
+		walletID,
+	).Scan(&kind, &balance, &invoice)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("get wallet balance: %w", err)
 	}
-	next := math.Round((balance+delta)*100) / 100
-	if _, err := tx.ExecContext(ctx, `UPDATE wallets SET balance = ? WHERE id = ?`, next, walletID); err != nil {
+	updated := models.ApplyWalletDelta(models.Wallet{
+		Kind:           kind,
+		Balance:        balance,
+		InvoiceBalance: invoice,
+	}, delta)
+	if models.IsCredit(kind) {
+		if _, err := tx.ExecContext(ctx, `UPDATE wallets SET invoice_balance = ? WHERE id = ?`, updated.InvoiceBalance, walletID); err != nil {
+			return fmt.Errorf("adjust wallet invoice: %w", err)
+		}
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE wallets SET balance = ? WHERE id = ?`, updated.Balance, walletID); err != nil {
 		return fmt.Errorf("adjust wallet: %w", err)
 	}
 	return nil

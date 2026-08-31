@@ -16,16 +16,26 @@ import {
   TrashIcon,
 } from './icons'
 import { applyTheme, getPreferredTheme, persistTheme, type Theme } from './theme'
+import { AccountLogin } from './AccountLogin'
 import { BillEndMonthPicker } from './BillEndMonthPicker'
 import { BillSchedulePicker } from './BillSchedulePicker'
 import { DayDatePicker } from './DayDatePicker'
+import {
+  getActiveMemberId,
+  loadSavedAccounts,
+  removeSavedAccount,
+  saveAccount,
+  setActiveMemberId as persistActiveMemberId,
+  syncSavedAccountNames,
+  type DeviceAccount,
+} from './deviceAccounts'
 import {
   billActiveInMonth,
   billChargeInMonth,
   billShareForMember,
   parseLocaleNumber,
 } from './billUtils'
-import { creditCardLabel } from './creditCards'
+import { creditCardLabel, CREDIT_ISSUERS } from './creditCards'
 import { InstallBanner } from './InstallBanner'
 import { createInstallHint, type InstallHint } from './pwaInstall'
 import {
@@ -57,10 +67,10 @@ import type {
 } from './types'
 import './index.css'
 
-type View = 'home' | 'ledger' | 'bills' | 'savings' | 'family' | 'categories' | 'statistics' | 'settings'
-type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | null
+type View = 'home' | 'ledger' | 'bills' | 'savings' | 'family' | 'categories' | 'statistics' | 'settings' | 'accounts'
+type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | null
 type WalletOwner = number | 'joint'
-type MemberBenefitKey = 'checking' | 'credit' | 'meal' | 'food' | 'fuel' | 'company'
+type MemberBenefitKey = 'checking' | 'meal' | 'food' | 'fuel'
 
 const WALLET_KINDS: { kind: WalletKind; label: string }[] = [
   { kind: 'checking', label: 'Pix / conta' },
@@ -77,11 +87,9 @@ const MEMBER_BENEFITS: {
   aliases: string[]
 }[] = [
   { key: 'checking', name: 'Conta / Pix', kind: 'checking', aliases: ['conta', 'pix'] },
-  { key: 'credit', name: 'Cartão de crédito', kind: 'credit', aliases: ['cartão', 'credito', 'crédito'] },
   { key: 'meal', name: 'Vale-alimentação', kind: 'benefit', aliases: ['alimentação', 'alimentacao'] },
   { key: 'food', name: 'Vale-refeição', kind: 'benefit', aliases: ['refeição', 'refeicao'] },
   { key: 'fuel', name: 'Vale-combustível', kind: 'benefit', aliases: ['combustível', 'combustivel', 'mobilidade'] },
-  { key: 'company', name: 'Empresa', kind: 'company', aliases: ['empresa'] },
 ]
 
 type TxPrefill = {
@@ -182,20 +190,63 @@ function isCompanyMemberName(name: string) {
   return name.trim().toLowerCase() === 'empresa'
 }
 
+function isCreditWallet(wallet: Wallet) {
+  return wallet.kind === 'credit'
+}
+
+function isCompanyWallet(wallet: Wallet) {
+  return wallet.kind === 'company'
+}
+
+function creditAvailable(wallet: Wallet) {
+  return (wallet.credit_limit ?? 0) - (wallet.invoice_balance ?? 0)
+}
+
+function walletSpendLabel(wallet: Wallet) {
+  if (isCreditWallet(wallet)) {
+    const invoice = wallet.invoice_balance ?? 0
+    return `${wallet.name} · fatura ${currency.format(invoice)}`
+  }
+  return `${wallet.name} · ${walletKindLabel(wallet.kind)} · ${currency.format(wallet.balance)}`
+}
+
 function payWalletsForMember(wallets: Wallet[], memberId: number) {
-  const own = wallets.filter((wallet) => wallet.member_id === memberId && wallet.kind !== 'savings')
+  const own = wallets.filter(
+    (wallet) =>
+      wallet.kind !== 'savings' && (wallet.member_id === memberId || isCompanyWallet(wallet)),
+  )
   const cash = own.filter((wallet) => wallet.kind !== 'benefit')
   return cash.length > 0 ? cash : own
 }
 
-function spendWalletsForMember(wallets: Wallet[], memberId: number) {
+function spendWalletsForMember(wallets: Wallet[], memberId: number, forIncome = false) {
   return wallets
-    .filter((wallet) => wallet.member_id === memberId && wallet.kind !== 'savings')
+    .filter((wallet) => {
+      if (wallet.kind === 'savings') return false
+      if (forIncome && isCreditWallet(wallet)) return false
+      return wallet.member_id === memberId || isCompanyWallet(wallet)
+    })
     .sort((a, b) => walletKindOrder(a.kind) - walletKindOrder(b.kind) || a.name.localeCompare(b.name))
 }
 
-function preferredSpendWallet(wallets: Wallet[], memberId: number) {
-  const options = spendWalletsForMember(wallets, memberId)
+function invoicePayWallets(wallets: Wallet[], memberId: number) {
+  return wallets
+    .filter(
+      (wallet) =>
+        !isCreditWallet(wallet) &&
+        wallet.kind !== 'savings' &&
+        (wallet.member_id === memberId || isCompanyWallet(wallet)),
+    )
+    .sort((a, b) => walletKindOrder(a.kind) - walletKindOrder(b.kind) || a.name.localeCompare(b.name))
+}
+
+function billWallet(wallets: Wallet[], bill: { wallet_id?: number | null }) {
+  if (!bill.wallet_id) return null
+  return wallets.find((wallet) => wallet.id === bill.wallet_id) ?? null
+}
+
+function preferredSpendWallet(wallets: Wallet[], memberId: number, forIncome = false) {
+  const options = spendWalletsForMember(wallets, memberId, forIncome)
   const checking = options.find((wallet) => wallet.kind === 'checking')
   return checking ?? options[0] ?? null
 }
@@ -215,7 +266,7 @@ function goalCheckingWallets(wallets: Wallet[], memberIds: number[]) {
 
 function walletMatchesBenefit(wallet: Wallet, benefit: (typeof MEMBER_BENEFITS)[number]) {
   if (wallet.kind !== benefit.kind) return false
-  if (benefit.kind === 'checking' || benefit.kind === 'credit' || benefit.kind === 'company') return true
+  if (benefit.kind === 'checking') return true
   const name = wallet.name.toLowerCase()
   return benefit.aliases.some((alias) => name.includes(alias))
 }
@@ -269,6 +320,9 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [forecast, setForecast] = useState<MonthlyForecast | null>(null)
   const [memberFilter, setMemberFilter] = useState<number | 'all'>('all')
+  const [activeMemberId, setActiveMemberId] = useState<number | null>(() => getActiveMemberId())
+  const [savedAccounts, setSavedAccounts] = useState<DeviceAccount[]>(() => loadSavedAccounts())
+  const [accountSwitcher, setAccountSwitcher] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState<{
@@ -326,6 +380,7 @@ export default function App() {
     interest_rate: '',
     category_id: 0,
     member_ids: [] as number[],
+    wallet_id: 0,
     due_day: '10',
     frequency: 'monthly' as BillFrequency,
     recurrence: 'ongoing' as BillRecurrence,
@@ -347,8 +402,17 @@ export default function App() {
     kind: 'checking' as WalletKind,
     member_id: 'joint' as WalletOwner,
     balance: '',
+    closing_day: '',
+    due_day: '',
+    credit_limit: '',
+    invoice_balance: '',
   })
   const [payForm, setPayForm] = useState({ member_id: 0, wallet_id: 0 })
+  const [invoiceForm, setInvoiceForm] = useState({
+    wallet_id: 0,
+    from_wallet_id: 0,
+    amount: '',
+  })
 
   const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
@@ -356,6 +420,38 @@ export default function App() {
     () => members.filter((member) => !isCompanyMemberName(member.name)),
     [members],
   )
+  const companyMember = useMemo(
+    () => members.find((member) => isCompanyMemberName(member.name)) ?? null,
+    [members],
+  )
+  const activeMember = useMemo(
+    () => personMembers.find((member) => member.id === activeMemberId) ?? null,
+    [personMembers, activeMemberId],
+  )
+  const needsLogin = !activeMemberId || !activeMember
+
+  function defaultMemberId(fallback = 0) {
+    return activeMemberId || fallback
+  }
+
+  function loginAs(member: Member, remember: boolean) {
+    if (remember) setSavedAccounts(saveAccount(member))
+    persistActiveMemberId(member.id)
+    setActiveMemberId(member.id)
+    setMemberFilter(member.id)
+    setAccountSwitcher(false)
+  }
+
+  function logoutAccount() {
+    persistActiveMemberId(null)
+    setActiveMemberId(null)
+    setAccountSwitcher(false)
+  }
+
+  function forgetSavedAccount(memberId: number) {
+    setSavedAccounts(removeSavedAccount(memberId))
+    if (activeMemberId === memberId) logoutAccount()
+  }
 
   function walletOwnerLabel(wallet: Wallet) {
     if (wallet.member_id == null) return 'Família'
@@ -401,11 +497,19 @@ export default function App() {
     [listedBills, paidBillIds],
   )
   const unpaidTotal = useMemo(() => {
-    return unpaidBills.reduce((sum, bill) => {
+    const billsDue = unpaidBills.reduce((sum, bill) => {
       if (memberFilter === 'all') return sum + billChargeInMonth(bill, year, month)
       return sum + billShareForMember(bill, memberFilter, year, month)
     }, 0)
-  }, [unpaidBills, memberFilter, year, month])
+    const invoices = wallets
+      .filter(
+        (wallet) =>
+          isCreditWallet(wallet) &&
+          (memberFilter === 'all' || wallet.member_id === memberFilter),
+      )
+      .reduce((sum, wallet) => sum + (wallet.invoice_balance ?? 0), 0)
+    return billsDue + invoices
+  }, [unpaidBills, memberFilter, year, month, wallets])
 
   const listedGoals = useMemo(() => {
     return [...savingsGoals]
@@ -435,8 +539,23 @@ export default function App() {
   }, [wallets, memberFilter])
 
   const cashWallets = useMemo(
-    () => listedWallets.filter((wallet) => wallet.kind !== 'savings'),
+    () => listedWallets.filter((wallet) => wallet.kind !== 'savings' && !isCreditWallet(wallet)),
     [listedWallets],
+  )
+  const creditWallets = useMemo(
+    () => listedWallets.filter((wallet) => isCreditWallet(wallet)),
+    [listedWallets],
+  )
+  const listedCreditCards = useMemo(
+    () =>
+      wallets
+        .filter(
+          (wallet) =>
+            isCreditWallet(wallet) &&
+            (memberFilter === 'all' || wallet.member_id === memberFilter),
+        )
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [wallets, memberFilter],
   )
   const cashTotal = useMemo(
     () => cashWallets.reduce((sum, wallet) => sum + wallet.balance, 0),
@@ -446,7 +565,7 @@ export default function App() {
   const billsByGroup = useMemo(() => {
     const joint: Bill[] = []
     const byMember = new Map<number, Bill[]>()
-    for (const member of personMembers) byMember.set(member.id, [])
+    for (const member of members) byMember.set(member.id, [])
     for (const bill of listedBills) {
       const ids = bill.member_ids ?? []
       if (ids.length === 1) {
@@ -458,7 +577,7 @@ export default function App() {
       }
     }
     return { joint, byMember }
-  }, [listedBills, personMembers])
+  }, [listedBills, members])
 
   const selectedMemberForecast = useMemo(() => {
     const list = forecast?.by_member ?? []
@@ -489,12 +608,20 @@ export default function App() {
       setForecast(fc)
       setWallets(walletList)
 
+      const people = mems.filter((member) => !isCompanyMemberName(member.name))
+      setSavedAccounts(syncSavedAccountNames(people))
+      const active = getActiveMemberId()
+      if (active != null && !people.some((member) => member.id === active)) {
+        persistActiveMemberId(null)
+        setActiveMemberId(null)
+      }
+
       const expenseCat = cats.find((c) => c.icon === 'market') ?? cats[0]
       const homeCat = cats.find((c) => c.icon === 'home') ?? expenseCat
       setTxForm((prev) => ({
         ...prev,
         category_id: prev.category_id || expenseCat?.id || 0,
-        member_id: prev.member_id || mems[0]?.id || 0,
+        member_id: prev.member_id || active || people[0]?.id || 0,
       }))
       setBillForm((prev) => ({
         ...prev,
@@ -612,7 +739,7 @@ export default function App() {
 
     openSheet(draft.mode, {
       category_id: matchCategoryId(categories, draft.categoryQuery, fallback?.id || 0),
-      member_id: matchMemberId(members, draft.memberQuery, members[0]?.id || 0),
+      member_id: matchMemberId(members, draft.memberQuery, defaultMemberId(members[0]?.id || 0)),
       description: draft.description,
       amount: draft.amount,
       date: draft.date || todayISO(),
@@ -664,7 +791,7 @@ export default function App() {
     setQuickLaunchSaving(true)
     setError('')
     try {
-      const memberId = members[0]?.id || 0
+      const memberId = defaultMemberId()
       await api.createTransaction({
         category_id: category.id,
         member_id: memberId || null,
@@ -702,8 +829,12 @@ export default function App() {
       setWalletForm({
         name: '',
         kind: 'checking',
-        member_id: memberFilter === 'all' ? 'joint' : memberFilter,
+        member_id: memberFilter === 'all' ? (defaultMemberId() || 'joint') : memberFilter,
         balance: '',
+        closing_day: '',
+        due_day: '',
+        credit_limit: '',
+        invoice_balance: '',
       })
     } else if (mode === 'goal') {
       setGoalPlan(null)
@@ -712,7 +843,7 @@ export default function App() {
         target_amount: '',
         end_kind: 'amount',
         end_month: '',
-        member_ids: personMembers.map((m) => m.id),
+        member_ids: defaultMemberId() ? [defaultMemberId()] : [],
         notes: '',
       })
     } else if (mode === 'bill') {
@@ -724,7 +855,8 @@ export default function App() {
         amount_mode: 'fixed',
         interest_rate: '',
         category_id: home?.id || 0,
-        member_ids: personMembers.map((m) => m.id),
+        member_ids: defaultMemberId() ? [defaultMemberId()] : [],
+        wallet_id: 0,
         due_day: String(due),
         frequency: 'monthly',
         recurrence: 'ongoing',
@@ -734,11 +866,11 @@ export default function App() {
       })
     } else if (mode === 'freelance') {
       const freelance = categories.find((c) => c.icon === 'freelance') ?? categories[0]
-      const memberId = prefill?.member_id || members[0]?.id || 0
+      const memberId = prefill?.member_id || defaultMemberId(members[0]?.id || 0)
       setTxForm({
         category_id: prefill?.category_id || freelance?.id || 0,
         member_id: memberId,
-        wallet_id: preferredSpendWallet(wallets, memberId)?.id ?? 0,
+        wallet_id: preferredSpendWallet(wallets, memberId, true)?.id ?? 0,
         description: prefill?.description || 'Freelancer',
         amount: prefill?.amount ?? '',
         date: prefill?.date || todayISO(),
@@ -746,11 +878,11 @@ export default function App() {
       })
     } else if (mode === 'income') {
       const salary = categories.find((c) => c.icon === 'salary') ?? categories[0]
-      const memberId = prefill?.member_id || members[0]?.id || 0
+      const memberId = prefill?.member_id || defaultMemberId(members[0]?.id || 0)
       setTxForm({
         category_id: prefill?.category_id || salary?.id || 0,
         member_id: memberId,
-        wallet_id: preferredSpendWallet(wallets, memberId)?.id ?? 0,
+        wallet_id: preferredSpendWallet(wallets, memberId, true)?.id ?? 0,
         description: prefill?.description || 'Salário recebido',
         amount: prefill?.amount ?? '',
         date: prefill?.date || todayISO(),
@@ -759,7 +891,7 @@ export default function App() {
     } else if (mode === 'expense') {
       const market = categories.find((c) => c.icon === 'market' || c.icon === 'food') ?? categories[0]
       const credit_card = prefill?.credit_card ?? ''
-      const memberId = prefill?.member_id || members[0]?.id || 0
+      const memberId = prefill?.member_id || defaultMemberId(members[0]?.id || 0)
       setTxForm({
         category_id: prefill?.category_id || market?.id || 0,
         member_id: memberId,
@@ -780,6 +912,7 @@ export default function App() {
     setEditingCategoryId(null)
     setEditingGoalId(null)
     setEditingWalletId(wallet.id)
+    setPayingBill(null)
     setWalletForm({
       name: wallet.name,
       kind: (WALLET_KINDS.some((item) => item.kind === wallet.kind)
@@ -787,8 +920,50 @@ export default function App() {
         : 'checking') as WalletKind,
       member_id: wallet.member_id ?? 'joint',
       balance: String(wallet.balance).replace('.', ','),
+      closing_day: wallet.closing_day ? String(wallet.closing_day) : '',
+      due_day: wallet.due_day ? String(wallet.due_day) : '',
+      credit_limit: wallet.credit_limit ? String(wallet.credit_limit).replace('.', ',') : '',
+      invoice_balance: wallet.invoice_balance ? String(wallet.invoice_balance).replace('.', ',') : '',
     })
     setSheet('wallet')
+  }
+
+  function openNewWallet(kind: WalletKind, memberId: number | 'joint') {
+    setEditingTxId(null)
+    setEditingMemberId(null)
+    setEditingBillId(null)
+    setEditingCategoryId(null)
+    setEditingGoalId(null)
+    setEditingWalletId(null)
+    setPayingBill(null)
+    const defaultName =
+      kind === 'credit'
+        ? 'Nubank'
+        : kind === 'company'
+          ? 'Conta da empresa'
+          : 'Conta / Pix'
+    setWalletForm({
+      name: defaultName,
+      kind,
+      member_id: memberId,
+      balance: '',
+      closing_day: kind === 'credit' ? '10' : '',
+      due_day: kind === 'credit' ? '17' : '',
+      credit_limit: '',
+      invoice_balance: '',
+    })
+    setSheet('wallet')
+  }
+
+  function openPayInvoice(wallet: Wallet) {
+    const ownerId = wallet.member_id ?? defaultMemberId()
+    const sources = invoicePayWallets(wallets, ownerId)
+    setInvoiceForm({
+      wallet_id: wallet.id,
+      from_wallet_id: sources[0]?.id ?? 0,
+      amount: wallet.invoice_balance ? String(wallet.invoice_balance).replace('.', ',') : '',
+    })
+    setSheet('pay-invoice')
   }
 
   async function submitTransaction(event: FormEvent) {
@@ -906,13 +1081,24 @@ export default function App() {
       setError('Informe o valor da conta.')
       return
     }
+    const memberIds =
+      billForm.member_ids.length > 0
+        ? billForm.member_ids
+        : defaultMemberId()
+          ? [defaultMemberId()]
+          : []
+    if (memberIds.length === 0) {
+      setError('Entre com uma conta da família antes de salvar.')
+      return
+    }
     const payload = {
       name: billForm.name,
       amount,
       amount_mode: billForm.amount_mode,
       interest_rate: isInterest ? (Number.isNaN(interestRate) ? 0 : interestRate) : 0,
       category_id: billForm.category_id,
-      member_ids: billForm.member_ids,
+      member_ids: memberIds,
+      wallet_id: billForm.wallet_id || null,
       due_day: Number(billForm.due_day),
       frequency: billForm.frequency,
       recurrence: billForm.recurrence,
@@ -985,11 +1171,36 @@ export default function App() {
       setError('Informe um saldo válido.')
       return
     }
+    const isCredit = walletForm.kind === 'credit'
+    const closingDay = Number(walletForm.closing_day)
+    const dueDay = Number(walletForm.due_day)
+    if (isCredit && walletForm.closing_day && (closingDay < 1 || closingDay > 31)) {
+      setError('Dia de fechamento deve ser entre 1 e 31.')
+      return
+    }
+    if (isCredit && walletForm.due_day && (dueDay < 1 || dueDay > 31)) {
+      setError('Dia de vencimento deve ser entre 1 e 31.')
+      return
+    }
+    const creditLimit = parseLocaleNumber(walletForm.credit_limit || '0')
+    const invoiceBalance = parseLocaleNumber(walletForm.invoice_balance || '0')
+    if (isCredit && (Number.isNaN(creditLimit) || creditLimit < 0)) {
+      setError('Informe um limite válido.')
+      return
+    }
+    if (isCredit && (Number.isNaN(invoiceBalance) || invoiceBalance < 0)) {
+      setError('Informe uma fatura válida.')
+      return
+    }
     const payload = {
       name: walletForm.name.trim(),
       kind: walletForm.kind,
       member_id: walletForm.member_id === 'joint' ? null : walletForm.member_id,
-      balance,
+      balance: isCredit ? 0 : balance,
+      closing_day: isCredit && walletForm.closing_day ? closingDay : null,
+      due_day: isCredit && walletForm.due_day ? dueDay : null,
+      credit_limit: isCredit ? creditLimit : 0,
+      invoice_balance: isCredit ? invoiceBalance : 0,
     }
     try {
       if (editingWalletId) {
@@ -1044,17 +1255,47 @@ export default function App() {
 
   function openPayBill(bill: Bill) {
     const assigned = bill.member_ids ?? []
+    const assignedWallet = billWallet(wallets, bill)
+    const companyPayer =
+      companyMember && assigned.length === 1 && assigned[0] === companyMember.id
+        ? companyMember.id
+        : 0
     const preferred =
-      memberFilter !== 'all' && (assigned.length === 0 || assigned.includes(memberFilter))
-        ? memberFilter
-        : assigned[0] ?? members[0]?.id ?? 0
+      assignedWallet?.member_id ||
+      companyPayer ||
+      defaultMemberId(assigned[0] ?? members[0]?.id ?? 0)
     const options = payWalletsForMember(wallets, preferred)
+    const companyFirst = options.find((wallet) => isCompanyWallet(wallet))
     setPayingBill(bill)
     setPayForm({
       member_id: preferred,
-      wallet_id: options[0]?.id ?? 0,
+      wallet_id:
+        assignedWallet?.id ??
+        (companyPayer ? companyFirst?.id : options[0]?.id) ??
+        options[0]?.id ??
+        0,
     })
     setSheet('pay-bill')
+  }
+
+  async function startPayBill(bill: Bill) {
+    const assignedWallet = billWallet(wallets, bill)
+    if (assignedWallet && isCreditWallet(assignedWallet)) {
+      try {
+        await api.setBillPaid(bill.id, {
+          year,
+          month,
+          paid: true,
+          paid_by_member_id: assignedWallet.member_id ?? defaultMemberId(),
+          wallet_id: assignedWallet.id,
+        })
+        await refresh()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Erro ao lançar no cartão')
+      }
+      return
+    }
+    openPayBill(bill)
   }
 
   async function submitPayBill(event: FormEvent) {
@@ -1080,6 +1321,29 @@ export default function App() {
     }
   }
 
+  async function submitPayInvoice(event: FormEvent) {
+    event.preventDefault()
+    const amount = parseLocaleNumber(invoiceForm.amount)
+    if (!(amount > 0)) {
+      setError('Informe o valor da fatura.')
+      return
+    }
+    if (!invoiceForm.from_wallet_id) {
+      setError('Escolha de onde sai o pagamento.')
+      return
+    }
+    try {
+      await api.payWalletInvoice(invoiceForm.wallet_id, {
+        amount,
+        from_wallet_id: invoiceForm.from_wallet_id,
+      })
+      setSheet(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao pagar fatura')
+    }
+  }
+
   async function markBillUnpaid(bill: Bill) {
     try {
       await api.setBillPaid(bill.id, { year, month, paid: false })
@@ -1093,7 +1357,7 @@ export default function App() {
     ? Math.min(1, forecast.total_available > 0 ? forecast.projected_expense / forecast.total_available : 0)
     : 0
   const paceClass = usedRatio >= 1 ? 'danger' : usedRatio >= 0.85 ? 'warn' : ''
-  const isConfigView = view === 'settings' || view === 'family' || view === 'categories'
+  const isConfigView = view === 'settings' || view === 'family' || view === 'categories' || view === 'accounts'
   const homeForecastRemaining =
     memberFilter === 'all' ? (forecast?.remaining ?? 0) : (selectedMemberForecast?.remaining ?? 0)
   const homeForecastAvailable =
@@ -1105,6 +1369,50 @@ export default function App() {
   const goalFundingWalletId = goalMoveWallets.some((wallet) => wallet.id === goalAdjustWalletId)
     ? goalAdjustWalletId
     : (goalMoveWallets[0]?.id ?? 0)
+  const billSplitFamily =
+    personMembers.length > 1 &&
+    personMembers.every((member) => billForm.member_ids.includes(member.id))
+  const billPaidByCompany =
+    companyMember != null &&
+    billForm.member_ids.length === 1 &&
+    billForm.member_ids[0] === companyMember.id
+  const goalSplitFamily =
+    personMembers.length > 1 &&
+    personMembers.every((member) => goalForm.member_ids.includes(member.id))
+
+  async function createFirstMember(name: string) {
+    const saved = await api.createMember({ name, monthly_salary: 0 })
+    try {
+      await api.createWallet({
+        name: 'Conta corrente',
+        kind: 'checking',
+        member_id: saved.id,
+        balance: 0,
+      })
+    } catch {
+      /* wallet opcional na criação inicial */
+    }
+    await refresh()
+    loginAs(saved, true)
+  }
+
+  function sheetHeading() {
+    if (sheet === 'pay-bill') return 'Confirmar pagamento'
+    if (sheet === 'pay-invoice') return 'Pagar fatura'
+    if (sheet === 'wallet') {
+      if (editingWalletId) return walletForm.kind === 'credit' ? 'Editar cartão' : 'Editar saldo'
+      if (walletForm.kind === 'credit') return 'Novo cartão'
+      if (walletForm.kind === 'company') return 'Conta da empresa'
+      return 'Nova conta'
+    }
+    if (sheet === 'member') return editingMemberId ? 'Editar pessoa' : 'Nova pessoa'
+    if (sheet === 'category') return editingCategoryId ? 'Editar categoria' : 'Nova categoria'
+    if (sheet === 'goal') return editingGoalId ? 'Editar meta' : 'Nova meta'
+    if (sheet === 'bill') return editingBillId ? 'Editar conta' : 'Nova conta'
+    if (sheet === 'expense') return editingTxId ? 'Editar gasto' : 'Novo gasto'
+    if (sheet === 'freelance') return 'Freelancer feito'
+    return editingTxId ? 'Editar entrada' : 'Salário recebido'
+  }
 
   function openBillEditor(bill: Bill) {
     setEditingBillId(bill.id)
@@ -1115,6 +1423,7 @@ export default function App() {
       interest_rate: bill.interest_rate > 0 ? String(bill.interest_rate) : '',
       category_id: bill.category_id,
       member_ids: bill.member_ids ?? [],
+      wallet_id: bill.wallet_id ?? 0,
       due_day: String(bill.due_day),
       frequency: bill.frequency || 'monthly',
       recurrence: bill.recurrence,
@@ -1138,6 +1447,43 @@ export default function App() {
     setSheet('goal')
   }
 
+  function renderFaturaRow(card: Wallet) {
+    const invoice = card.invoice_balance ?? 0
+    const paid = invoice <= 0
+    const overdue = !paid && card.due_day != null && isBillOverdue(card.due_day, year, month)
+    return (
+      <article
+        key={`fatura-${card.id}`}
+        className={`row bill-manage-row${paid ? ' paid' : ''}${overdue ? ' overdue' : ''}`}
+      >
+        <button
+          type="button"
+          className={`check-pay${paid ? ' on' : ''}`}
+          aria-pressed={paid}
+          aria-label={paid ? 'Fatura paga' : `Pagar fatura ${card.name}`}
+          onClick={() => {
+            if (!paid) openPayInvoice(card)
+          }}
+        >
+          {paid ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M5 12.5 9.5 17 19 7" />
+            </svg>
+          ) : null}
+        </button>
+        <div className="row-main">
+          <h3>Fatura {card.name}</h3>
+          <p>
+            vence dia {card.due_day ?? '—'}
+            {overdue ? ' · atrasada' : ''}
+            {paid ? ' · em dia' : ' · pagar no Pix / conta'}
+          </p>
+        </div>
+        <div className={`amount ${paid ? 'income' : 'expense'}`}>{currency.format(invoice)}</div>
+      </article>
+    )
+  }
+
   function renderBillRow(bill: Bill) {
     const cat = categoryById.get(bill.category_id)
     const monthAmount = billChargeInMonth(bill, year, month)
@@ -1150,11 +1496,19 @@ export default function App() {
       .map((id) => memberById.get(id)?.name)
       .filter(Boolean)
       .join(', ')
+    const card = billWallet(wallets, bill)
     const overdue = !paid && isBillOverdue(bill.due_day, year, month)
     const ids = bill.member_ids ?? []
     const shareLabel =
       ids.length > 1
         ? ` · ${ids.length} pessoas · ${currency.format(monthAmount / ids.length)} cada`
+        : ''
+    const payHint = !paid && card
+      ? isCreditWallet(card)
+        ? ` · no ${card.name}`
+        : ` · ${card.name}`
+      : payers && !paid
+        ? ` · ${payers}`
         : ''
     return (
       <article key={bill.id} className={`row bill-manage-row${paid ? ' paid' : ''}${overdue ? ' overdue' : ''}`}>
@@ -1163,7 +1517,7 @@ export default function App() {
           className={`check-pay${paid ? ' on' : ''}`}
           aria-pressed={paid}
           aria-label={paid ? 'Desmarcar paga' : 'Marcar como paga'}
-          onClick={() => (paid ? void markBillUnpaid(bill) : openPayBill(bill))}
+          onClick={() => (paid ? void markBillUnpaid(bill) : void startPayBill(bill))}
         >
           {paid ? (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
@@ -1177,7 +1531,7 @@ export default function App() {
             vence dia {bill.due_day}
             {overdue ? ' · atrasada' : ''}
             {paid && paidByName ? ` · pago por ${paidByName}` : ''}
-            {payers && !paid ? ` · ${payers}` : ''}
+            {payHint}
             {cat ? ` · ${cat.name}` : ''}
             {shareLabel}
           </p>
@@ -1207,14 +1561,47 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <>
+      {loading ? (
+        <div className="app app--auth">
+          <div className="empty">Carregando…</div>
+        </div>
+      ) : null}
+
+      {!loading && needsLogin ? (
+        <div className="app app--auth">
+          <AccountLogin
+            members={personMembers}
+            savedAccounts={savedAccounts}
+            onLogin={loginAs}
+            onCreateFirst={createFirstMember}
+          />
+        </div>
+      ) : null}
+
+      {!loading && !needsLogin ? (
+      <div className="app">
       <div className="app-main">
       <header className="top">
         <div>
           <h1>Fluxo</h1>
-          <p>Família · contas · gastos</p>
+          <p>{activeMember ? `Conta de ${activeMember.name}` : 'Família · contas · gastos'}</p>
         </div>
         <div className="top-controls">
+          {activeMember ? (
+            <button
+              type="button"
+              className="account-chip"
+              onClick={() => setAccountSwitcher(true)}
+              aria-label="Trocar conta neste dispositivo"
+              title="Trocar conta"
+            >
+              <span className="account-chip-avatar" aria-hidden>
+                {activeMember.name.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="account-chip-name">{activeMember.name}</span>
+            </button>
+          ) : null}
           <button
             type="button"
             className="theme-toggle"
@@ -1253,27 +1640,59 @@ export default function App() {
         onInstall={() => void installCtrl.current?.prompt()}
         onDismiss={() => installCtrl.current?.dismiss()}
       />
-      {loading ? <div className="empty">Carregando…</div> : null}
 
       {!isConfigView && view !== 'statistics' && (
-        <div className="filter-bar" aria-label="Filtro por pessoa">
-          <button
-            type="button"
-            className={memberFilter === 'all' ? 'chip active' : 'chip'}
-            onClick={() => setMemberFilter('all')}
-          >
-            Toda a família
-          </button>
-          {personMembers.map((member) => (
+        <div className="top-filter-row">
+          <div className="filter-bar" aria-label="Filtro por pessoa">
             <button
-              key={member.id}
               type="button"
-              className={memberFilter === member.id ? 'chip active' : 'chip'}
-              onClick={() => setMemberFilter(member.id)}
+              className={memberFilter === 'all' ? 'chip active' : 'chip'}
+              onClick={() => setMemberFilter('all')}
             >
-              {member.name}
+              Toda a família
             </button>
-          ))}
+            {personMembers.map((member) => (
+              <button
+                key={member.id}
+                type="button"
+                className={memberFilter === member.id ? 'chip active' : 'chip'}
+                onClick={() => setMemberFilter(member.id)}
+              >
+                {member.name}
+              </button>
+            ))}
+          </div>
+          {view === 'home' && (
+            <div className="home-quick" aria-label="Ações rápidas">
+              <button
+                type="button"
+                className="home-quick-btn"
+                aria-label="Novo gasto"
+                title="Novo gasto"
+                onClick={() => openSheet('expense')}
+              >
+                <CategoryGlyph icon="shopping" />
+              </button>
+              <button
+                type="button"
+                className="home-quick-btn"
+                aria-label="Freelancer"
+                title="Freelancer"
+                onClick={() => openSheet('freelance')}
+              >
+                <CategoryGlyph icon="freelance" />
+              </button>
+              <button
+                type="button"
+                className="home-quick-btn"
+                aria-label="Nova conta"
+                title="Nova conta"
+                onClick={() => openSheet('bill')}
+              >
+                <BillsNavIcon />
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1294,7 +1713,12 @@ export default function App() {
                 <div className="list" style={{ marginTop: '0.85rem' }}>
                   {personMembers.map((member) => {
                     const total = wallets
-                      .filter((wallet) => wallet.member_id === member.id && wallet.kind !== 'savings')
+                      .filter(
+                        (wallet) =>
+                          wallet.member_id === member.id &&
+                          wallet.kind !== 'savings' &&
+                          !isCreditWallet(wallet),
+                      )
                       .reduce((sum, wallet) => sum + wallet.balance, 0)
                     return (
                       <button
@@ -1317,9 +1741,9 @@ export default function App() {
                     )
                   })}
                 </div>
-              ) : cashWallets.length === 0 ? (
+              ) : cashWallets.length === 0 && creditWallets.length === 0 ? (
                 <p className="empty" style={{ marginTop: '0.85rem' }}>
-                  Nenhum saldo nesta pessoa. Cadastre os benefícios em Configuração.
+                  Nenhum saldo nesta pessoa. Cadastre contas e cartões em Configuração.
                 </p>
               ) : (
                 <div className="list" style={{ marginTop: '0.85rem' }}>
@@ -1341,6 +1765,28 @@ export default function App() {
                       </div>
                       <div className={`amount ${wallet.balance < 0 ? 'expense' : 'income'}`}>
                         {currency.format(wallet.balance)}
+                      </div>
+                    </button>
+                  ))}
+                  {creditWallets.map((wallet) => (
+                    <button
+                      key={wallet.id}
+                      type="button"
+                      className="row"
+                      onClick={() => openWalletSheet(wallet)}
+                    >
+                      <div className="icon-wrap">
+                        <CategoryGlyph icon={walletKindIcon(wallet.kind)} />
+                      </div>
+                      <div className="row-main">
+                        <h3>{wallet.name}</h3>
+                        <p>
+                          Fatura · vence dia {wallet.due_day ?? '—'}
+                          {wallet.closing_day ? ` · fecha dia ${wallet.closing_day}` : ''}
+                        </p>
+                      </div>
+                      <div className={`amount ${(wallet.invoice_balance ?? 0) > 0 ? 'expense' : 'income'}`}>
+                        {currency.format(wallet.invoice_balance ?? 0)}
                       </div>
                     </button>
                   ))}
@@ -1551,50 +1997,107 @@ export default function App() {
           <section className="card">
             <h2>Contas do mês</h2>
             <p className="meta" style={{ marginBottom: '0.85rem' }}>
-              {listedBills.length === 0
+              {listedBills.length === 0 && listedCreditCards.length === 0
                 ? 'Nenhuma conta ativa neste mês.'
-                : `${paidBills.length} de ${listedBills.length} pagas · falta ${currency.format(unpaidTotal)}. Marque para subtrair de quem pagou.`}
+                : `Falta ${currency.format(unpaidTotal)}. Contas no cartão entram na fatura; a fatura sai do Pix.`}
             </p>
-            {listedBills.length > 0 && (
+            {(listedBills.length > 0 || listedCreditCards.length > 0) && (
               <div
                 className={`progress checklist-progress ${
-                  unpaidBills.length === 0
+                  unpaidBills.length === 0 && listedCreditCards.every((card) => (card.invoice_balance ?? 0) <= 0)
                     ? ''
-                    : unpaidBills.some((bill) => isBillOverdue(bill.due_day, year, month))
+                    : unpaidBills.some((bill) => isBillOverdue(bill.due_day, year, month)) ||
+                        listedCreditCards.some(
+                          (card) =>
+                            (card.invoice_balance ?? 0) > 0 &&
+                            card.due_day != null &&
+                            isBillOverdue(card.due_day, year, month),
+                        )
                       ? 'warn'
                       : ''
                 }`}
               >
                 <i
                   style={{
-                    width: `${listedBills.length === 0 ? 0 : (paidBills.length / listedBills.length) * 100}%`,
+                    width: `${(() => {
+                      const cardPaid = listedCreditCards.filter((card) => (card.invoice_balance ?? 0) <= 0).length
+                      const total = listedBills.length + listedCreditCards.length
+                      return total === 0 ? 0 : ((paidBills.length + cardPaid) / total) * 100
+                    })()}%`,
                   }}
                 />
               </div>
             )}
-            {listedBills.length === 0 ? (
-              <p className="empty">Cadastre aluguel, internet, escola…</p>
-            ) : memberFilter === 'all' ? (
-              <>
-                {billsByGroup.joint.length > 0 ? (
-                  <>
-                    <p className="section-label">Conjuntas (divididas)</p>
-                    <div className="list">{billsByGroup.joint.map((bill) => renderBillRow(bill))}</div>
-                  </>
-                ) : null}
-                {personMembers.map((member) => {
-                  const items = billsByGroup.byMember.get(member.id) ?? []
-                  if (items.length === 0) return null
-                  return (
-                    <div key={member.id}>
-                      <p className="section-label">{member.name}</p>
-                      <div className="list">{items.map((bill) => renderBillRow(bill))}</div>
-                    </div>
-                  )
-                })}
-              </>
+            {listedBills.length === 0 && listedCreditCards.length === 0 ? (
+              <p className="empty">Cadastre aluguel, internet, fatura do cartão…</p>
             ) : (
-              <div className="list">{listedBills.map((bill) => renderBillRow(bill))}</div>
+              <>
+                {(() => {
+                  const isCashBill = (bill: Bill) => {
+                    const wallet = billWallet(wallets, bill)
+                    return !wallet || !isCreditWallet(wallet)
+                  }
+                  const cashBills = listedBills.filter(isCashBill)
+                  const renderCashGroups = () => {
+                    if (memberFilter !== 'all') {
+                      return cashBills.length > 0 ? (
+                        <div className="list">{cashBills.map((bill) => renderBillRow(bill))}</div>
+                      ) : null
+                    }
+                    return (
+                      <>
+                        {billsByGroup.joint.filter(isCashBill).length > 0 ? (
+                          <>
+                            <p className="section-label">À vista / conjuntas</p>
+                            <div className="list">
+                              {billsByGroup.joint.filter(isCashBill).map((bill) => renderBillRow(bill))}
+                            </div>
+                          </>
+                        ) : null}
+                        {personMembers.map((member) => {
+                          const items = (billsByGroup.byMember.get(member.id) ?? []).filter(isCashBill)
+                          if (items.length === 0) return null
+                          return (
+                            <div key={member.id}>
+                              <p className="section-label">{member.name} · à vista</p>
+                              <div className="list">{items.map((bill) => renderBillRow(bill))}</div>
+                            </div>
+                          )
+                        })}
+                        {companyMember ? (
+                          (billsByGroup.byMember.get(companyMember.id) ?? []).filter(isCashBill).length > 0 ? (
+                            <div>
+                              <p className="section-label">Empresa</p>
+                              <div className="list">
+                                {(billsByGroup.byMember.get(companyMember.id) ?? [])
+                                  .filter(isCashBill)
+                                  .map((bill) => renderBillRow(bill))}
+                              </div>
+                            </div>
+                          ) : null
+                        ) : null}
+                      </>
+                    )
+                  }
+                  return (
+                    <>
+                      {renderCashGroups()}
+                      {listedCreditCards.map((card) => {
+                        const onCard = listedBills.filter((bill) => bill.wallet_id === card.id)
+                        return (
+                          <div key={card.id}>
+                            <p className="section-label">Cartão {card.name}</p>
+                            <div className="list">
+                              {onCard.map((bill) => renderBillRow(bill))}
+                              {renderFaturaRow(card)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </>
+                  )
+                })()}
+              </>
             )}
             <button type="button" className="primary" onClick={() => openSheet('bill')}>
               Nova conta
@@ -1782,7 +2285,7 @@ export default function App() {
         <section className="card">
           <h2>Configuração</h2>
           <p className="meta" style={{ marginBottom: '0.85rem' }}>
-            Membros da família, benefícios e categorias.
+            Membros da família, contas, cartões e categorias.
           </p>
           <div className="list">
             <button type="button" className="row settings-item" onClick={() => setView('family')}>
@@ -1797,6 +2300,22 @@ export default function App() {
                     : members.length === 1
                       ? '1 pessoa'
                       : `${members.length} pessoas`}
+                </p>
+              </div>
+              <span className="settings-chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+            <button type="button" className="row settings-item" onClick={() => setView('accounts')}>
+              <div className="icon-wrap">
+                <CategoryGlyph icon="shopping" />
+              </div>
+              <div className="row-main">
+                <h3>Contas e cartões</h3>
+                <p>
+                  {wallets.filter((wallet) => wallet.kind !== 'savings').length === 0
+                    ? 'Pix, cartões de crédito e conta da empresa'
+                    : `${wallets.filter((wallet) => isCreditWallet(wallet)).length} cartões · ${wallets.filter((wallet) => wallet.kind === 'checking' || wallet.kind === 'company').length} contas`}
                 </p>
               </div>
               <span className="settings-chevron" aria-hidden>
@@ -1840,7 +2359,7 @@ export default function App() {
             <h2>Família</h2>
           </div>
           <p className="meta" style={{ marginBottom: '0.85rem' }}>
-            Salário mensal entra na previsão. Benefícios (Pix, cartão, vales, empresa) viram formas de pagar.
+            Salário mensal entra na previsão. Vales viram formas de pagar. Cartões e conta da empresa ficam em Contas e cartões.
           </p>
           {members.length === 0 ? (
             <p className="empty">Adicione quem mora / contribui em casa.</p>
@@ -1906,7 +2425,134 @@ export default function App() {
           </button>
         </section>
       )}
-        {view === 'statistics' && (
+
+      {view === 'accounts' && (
+        <section className="card">
+          <div className="section-head">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Voltar para configuração"
+              title="Voltar"
+              onClick={() => setView('settings')}
+            >
+              <ChevronLeftIcon />
+            </button>
+            <h2>Contas e cartões</h2>
+          </div>
+          <p className="meta" style={{ marginBottom: '0.85rem' }}>
+            Cada pessoa tem as contas do banco e os cartões. A fatura do cartão sobe nos gastos e pode ser paga no mês.
+            Contabilidade e Simples Nacional saem da conta da empresa.
+          </p>
+          {members.length === 0 ? (
+            <p className="empty">Cadastre a família primeiro.</p>
+          ) : (
+            members.map((member) => {
+              const own = wallets.filter((wallet) => wallet.member_id === member.id)
+              const cards = own.filter((wallet) => isCreditWallet(wallet))
+              const accounts = own.filter(
+                (wallet) => !isCreditWallet(wallet) && wallet.kind !== 'savings',
+              )
+              const company = isCompanyMemberName(member.name)
+              return (
+                <div key={member.id} className="account-group">
+                  <p className="section-label">{company ? 'Empresa' : member.name}</p>
+                  {accounts.length === 0 && cards.length === 0 ? (
+                    <p className="empty">Nenhuma conta ainda.</p>
+                  ) : (
+                    <div className="list">
+                      {accounts.map((wallet) => (
+                        <button
+                          key={wallet.id}
+                          type="button"
+                          className="row"
+                          onClick={() => openWalletSheet(wallet)}
+                        >
+                          <div className="icon-wrap">
+                            <CategoryGlyph icon={walletKindIcon(wallet.kind)} />
+                          </div>
+                          <div className="row-main">
+                            <h3>{wallet.name}</h3>
+                            <p>{walletKindLabel(wallet.kind)}</p>
+                          </div>
+                          <div className={`amount ${wallet.balance < 0 ? 'expense' : 'income'}`}>
+                            {currency.format(wallet.balance)}
+                          </div>
+                        </button>
+                      ))}
+                      {cards.map((wallet) => (
+                        <div key={wallet.id} className="account-card-row">
+                          <button
+                            type="button"
+                            className="row"
+                            onClick={() => openWalletSheet(wallet)}
+                          >
+                            <div className="icon-wrap">
+                              <CategoryGlyph icon="shopping" />
+                            </div>
+                            <div className="row-main">
+                              <h3>{wallet.name}</h3>
+                              <p>
+                                Fecha dia {wallet.closing_day ?? '—'} · vence dia {wallet.due_day ?? '—'}
+                                {' · '}
+                                disponível {currency.format(creditAvailable(wallet))}
+                              </p>
+                            </div>
+                            <div
+                              className={`amount ${(wallet.invoice_balance ?? 0) > 0 ? 'expense' : 'income'}`}
+                            >
+                              {currency.format(wallet.invoice_balance ?? 0)}
+                            </div>
+                          </button>
+                          {(wallet.invoice_balance ?? 0) > 0 ? (
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => openPayInvoice(wallet)}
+                            >
+                              Pagar
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="account-group-actions">
+                    {company ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => openNewWallet('company', member.id)}
+                      >
+                        Nova conta da empresa
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => openNewWallet('checking', member.id)}
+                        >
+                          Nova conta
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => openNewWallet('credit', member.id)}
+                        >
+                          Novo cartão
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </section>
+      )}
+
+      {view === 'statistics' && (
             <section className="card">
               <h2>Estatisticas</h2>
               <p className="meta" style={{ marginBottom: '0.85rem' }}>
@@ -2034,70 +2680,68 @@ export default function App() {
         <div className="sheet" role="dialog" aria-modal="true">
           <div className="sheet-panel">
             <header>
-              <h2>
-                {sheet === 'pay-bill'
-                  ? 'Quem pagou?'
-                  : sheet === 'wallet'
-                  ? editingWalletId
-                    ? 'Editar saldo'
-                    : 'Novo saldo'
-                  : sheet === 'member'
-                  ? editingMemberId
-                    ? 'Editar pessoa'
-                    : 'Nova pessoa'
-                  : sheet === 'category'
-                    ? editingCategoryId
-                      ? 'Editar categoria'
-                      : 'Nova categoria'
-                    : sheet === 'goal'
-                      ? editingGoalId
-                        ? 'Editar meta'
-                        : 'Nova meta'
-                  : sheet === 'bill'
-                    ? editingBillId
-                      ? 'Editar conta'
-                      : 'Nova conta'
-                  : sheet === 'expense'
-                    ? editingTxId
-                      ? 'Editar gasto'
-                      : 'Novo gasto'
-                    : sheet === 'freelance'
-                      ? 'Freelancer feito'
-                      : editingTxId
-                        ? 'Editar entrada'
-                        : 'Salário recebido'}
-              </h2>
+              <h2>{sheetHeading()}</h2>
               <button type="button" className="ghost" onClick={() => setSheet(null)}>
                 Fechar
               </button>
             </header>
 
-            {sheet === 'pay-bill' && payingBill ? (
+            {sheet === 'pay-invoice' ? (
+              <form className="form" onSubmit={submitPayInvoice}>
+                {(() => {
+                  const card = wallets.find((wallet) => wallet.id === invoiceForm.wallet_id)
+                  const sources = invoicePayWallets(
+                    wallets,
+                    card?.member_id ?? defaultMemberId(),
+                  )
+                  return (
+                    <>
+                      <p className="meta">
+                        {card?.name ?? 'Cartão'} · fatura {currency.format(card?.invoice_balance ?? 0)}
+                      </p>
+                      <label>
+                        Valor
+                        <input
+                          required
+                          type="text"
+                          inputMode="decimal"
+                          value={invoiceForm.amount}
+                          onChange={(e) => setInvoiceForm((p) => ({ ...p, amount: e.target.value }))}
+                          placeholder="0,00"
+                        />
+                      </label>
+                      <label>
+                        Sair de
+                        <select
+                          required
+                          value={invoiceForm.from_wallet_id || ''}
+                          onChange={(e) =>
+                            setInvoiceForm((p) => ({ ...p, from_wallet_id: Number(e.target.value) }))
+                          }
+                        >
+                          <option value="">Escolha a conta</option>
+                          {sources.map((wallet) => (
+                            <option key={wallet.id} value={wallet.id}>
+                              {wallet.name} · {currency.format(wallet.balance)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className="primary" type="submit" disabled={sources.length === 0}>
+                        Pagar fatura
+                      </button>
+                    </>
+                  )
+                })()}
+              </form>
+            ) : sheet === 'pay-bill' && payingBill ? (
               <form className="form" onSubmit={submitPayBill}>
                 <p className="meta">
                   {payingBill.name} · {currency.format(billChargeInMonth(payingBill, year, month))}
                 </p>
-                <div>
-                  <span className="field-label">Quem pagou</span>
-                  <div className="filter-bar" style={{ marginBottom: 0 }}>
-                    {members.map((member) => (
-                      <button
-                        key={member.id}
-                        type="button"
-                        className={payForm.member_id === member.id ? 'chip active' : 'chip'}
-                        onClick={() => {
-                          const options = payWalletsForMember(wallets, member.id)
-                          setPayForm({
-                            member_id: member.id,
-                            wallet_id: options[0]?.id ?? 0,
-                          })
-                        }}
-                      >
-                        {member.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <p className="meta">
+                  Pago por {memberById.get(payForm.member_id)?.name ?? activeMember?.name ?? 'você'}
+                </p>
                 {payWalletsForMember(wallets, payForm.member_id).length > 1 ? (
                   <label>
                     De qual conta
@@ -2109,16 +2753,13 @@ export default function App() {
                     >
                       {payWalletsForMember(wallets, payForm.member_id).map((wallet) => (
                         <option key={wallet.id} value={wallet.id}>
-                          {wallet.name} · {currency.format(wallet.balance)}
+                          {walletSpendLabel(wallet)}
                         </option>
                       ))}
                     </select>
                   </label>
                 ) : payWalletsForMember(wallets, payForm.member_id).length === 1 ? (
-                  <p className="meta">
-                    Sai de {payWalletsForMember(wallets, payForm.member_id)[0].name} (
-                    {currency.format(payWalletsForMember(wallets, payForm.member_id)[0].balance)})
-                  </p>
+                  <p className="meta">{walletSpendLabel(payWalletsForMember(wallets, payForm.member_id)[0])}</p>
                 ) : (
                   <p className="empty">Essa pessoa ainda não tem uma conta cadastrada.</p>
                 )}
@@ -2156,6 +2797,23 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                {walletForm.kind === 'credit' ? (
+                  <div>
+                    <span className="field-label">Banco</span>
+                    <div className="filter-bar" style={{ marginBottom: 0 }}>
+                      {CREDIT_ISSUERS.map((issuer) => (
+                        <button
+                          key={issuer.id}
+                          type="button"
+                          className={walletForm.name === issuer.label ? 'chip active' : 'chip'}
+                          onClick={() => setWalletForm((p) => ({ ...p, name: issuer.label }))}
+                        >
+                          {issuer.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <label>
                   De quem é
                   <select
@@ -2175,17 +2833,77 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-                <label>
-                  Saldo
-                  <input
-                    required
-                    type="text"
-                    inputMode="decimal"
-                    value={walletForm.balance}
-                    onChange={(e) => setWalletForm((p) => ({ ...p, balance: e.target.value }))}
-                    placeholder="0,00"
-                  />
-                </label>
+                {walletForm.kind === 'credit' ? (
+                  <>
+                    <label>
+                      Dia de fechamento
+                      <input
+                        required
+                        type="number"
+                        min="1"
+                        max="31"
+                        value={walletForm.closing_day}
+                        onChange={(e) => setWalletForm((p) => ({ ...p, closing_day: e.target.value }))}
+                        placeholder="10"
+                      />
+                    </label>
+                    <label>
+                      Vencimento mensal
+                      <input
+                        required
+                        type="number"
+                        min="1"
+                        max="31"
+                        value={walletForm.due_day}
+                        onChange={(e) => setWalletForm((p) => ({ ...p, due_day: e.target.value }))}
+                        placeholder="17"
+                      />
+                    </label>
+                    <label>
+                      Limite
+                      <input
+                        required
+                        type="text"
+                        inputMode="decimal"
+                        value={walletForm.credit_limit}
+                        onChange={(e) => setWalletForm((p) => ({ ...p, credit_limit: e.target.value }))}
+                        placeholder="5000"
+                      />
+                    </label>
+                    <label>
+                      Fatura atual
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={walletForm.invoice_balance}
+                        onChange={(e) =>
+                          setWalletForm((p) => ({ ...p, invoice_balance: e.target.value }))
+                        }
+                        placeholder="0,00"
+                      />
+                    </label>
+                    {editingWalletId && parseLocaleNumber(walletForm.invoice_balance || '0') > 0 ? (
+                      <button type="button" className="ghost" onClick={() => {
+                        const card = wallets.find((wallet) => wallet.id === editingWalletId)
+                        if (card) openPayInvoice(card)
+                      }}>
+                        Pagar fatura
+                      </button>
+                    ) : null}
+                  </>
+                ) : (
+                  <label>
+                    Saldo
+                    <input
+                      required
+                      type="text"
+                      inputMode="decimal"
+                      value={walletForm.balance}
+                      onChange={(e) => setWalletForm((p) => ({ ...p, balance: e.target.value }))}
+                      placeholder="0,00"
+                    />
+                  </label>
+                )}
                 <button className="primary" type="submit">
                   Salvar
                 </button>
@@ -2231,7 +2949,7 @@ export default function App() {
                   />
                 </label>
                 <div>
-                  <span className="field-label">Benefícios</span>
+                  <span className="field-label">Vales e Pix</span>
                   <div className="check-list check-list-compact">
                     {MEMBER_BENEFITS.map((benefit) => {
                       const checked = memberForm.benefits.includes(benefit.key)
@@ -2310,35 +3028,32 @@ export default function App() {
                     placeholder="Viagem, reserva, carro…"
                   />
                 </label>
-                <label>
-                  Quem participa
-                  <div className="check-list check-list-compact">
-                    {members.length === 0 ? (
-                      <span className="meta">Cadastre a família primeiro.</span>
-                    ) : (
-                      members.map((member) => {
-                        const checked = goalForm.member_ids.includes(member.id)
-                        return (
-                          <label key={member.id} className="check-item">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setGoalForm((prev) => ({
-                                  ...prev,
-                                  member_ids: checked
-                                    ? prev.member_ids.filter((id) => id !== member.id)
-                                    : [...prev.member_ids, member.id],
-                                }))
-                              }}
-                            />
-                            <span>{member.name}</span>
-                          </label>
-                        )
-                      })
-                    )}
-                  </div>
-                </label>
+                <div>
+                  <span className="field-label">Quem participa</span>
+                  {personMembers.length > 1 ? (
+                    <label className="split-toggle">
+                      <input
+                        type="checkbox"
+                        checked={goalSplitFamily}
+                        onChange={() => {
+                          setGoalForm((prev) => ({
+                            ...prev,
+                            member_ids: goalSplitFamily
+                              ? defaultMemberId()
+                                ? [defaultMemberId()]
+                                : []
+                              : personMembers.map((member) => member.id),
+                          }))
+                        }}
+                      />
+                      <span>Dividir com a família</span>
+                    </label>
+                  ) : (
+                    <p className="meta" style={{ margin: '0.35rem 0 0' }}>
+                      {activeMember?.name ?? 'Você'}
+                    </p>
+                  )}
+                </div>
                 <div>
                   <span className="field-label">Até quando? (opcional)</span>
                   <div className="filter-bar" style={{ marginBottom: 0 }}>
@@ -2543,34 +3258,94 @@ export default function App() {
                       </select>
                     </label>
                     <label>
-                      Quem paga
-                      <div className="check-list check-list-compact">
-                        {members.length === 0 ? (
-                          <span className="meta">Cadastre a família primeiro.</span>
-                        ) : (
-                          members.map((member) => {
-                            const checked = billForm.member_ids.includes(member.id)
-                            return (
-                              <label key={member.id} className="check-item">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => {
-                                    setBillForm((prev) => ({
-                                      ...prev,
-                                      member_ids: checked
-                                        ? prev.member_ids.filter((id) => id !== member.id)
-                                        : [...prev.member_ids, member.id],
-                                    }))
-                                  }}
-                                />
-                                <span>{member.name}</span>
-                              </label>
-                            )
-                          })
-                        )}
-                      </div>
+                      Como paga
+                      <select
+                        value={billForm.wallet_id || ''}
+                        onChange={(e) => {
+                          const wallet_id = Number(e.target.value) || 0
+                          const wallet = wallets.find((item) => item.id === wallet_id)
+                          setBillForm((p) => ({
+                            ...p,
+                            wallet_id,
+                            member_ids: wallet
+                              ? isCompanyWallet(wallet) && companyMember
+                                ? [companyMember.id]
+                                : wallet.member_id
+                                  ? [wallet.member_id]
+                                  : p.member_ids
+                              : defaultMemberId()
+                                ? [defaultMemberId()]
+                                : p.member_ids,
+                          }))
+                        }}
+                      >
+                        <option value="">À vista (Pix / conta)</option>
+                        {wallets
+                          .filter((wallet) => wallet.kind !== 'savings' && wallet.kind !== 'benefit')
+                          .sort(
+                            (a, b) =>
+                              walletKindOrder(a.kind) - walletKindOrder(b.kind) ||
+                              a.name.localeCompare(b.name, 'pt-BR'),
+                          )
+                          .map((wallet) => (
+                            <option key={wallet.id} value={wallet.id}>
+                              {isCreditWallet(wallet) ? `Cartão ${wallet.name}` : wallet.name}
+                              {wallet.member_id
+                                ? ` · ${memberById.get(wallet.member_id)?.name ?? ''}`
+                                : ''}
+                            </option>
+                          ))}
+                      </select>
                     </label>
+                    <div>
+                      <span className="field-label">Responsáveis</span>
+                      {billPaidByCompany ? (
+                        <p className="meta" style={{ margin: '0.35rem 0 0.45rem' }}>
+                          Sai da conta da empresa
+                        </p>
+                      ) : personMembers.length > 1 ? (
+                        <label className="split-toggle">
+                          <input
+                            type="checkbox"
+                            checked={billSplitFamily}
+                            onChange={() => {
+                              setBillForm((prev) => ({
+                                ...prev,
+                                member_ids: billSplitFamily
+                                  ? defaultMemberId()
+                                    ? [defaultMemberId()]
+                                    : []
+                                  : personMembers.map((member) => member.id),
+                              }))
+                            }}
+                          />
+                          <span>Dividir com a família</span>
+                        </label>
+                      ) : (
+                        <p className="meta" style={{ margin: '0.35rem 0 0' }}>
+                          {activeMember?.name ?? 'Você'}
+                        </p>
+                      )}
+                      {companyMember ? (
+                        <label className="split-toggle">
+                          <input
+                            type="checkbox"
+                            checked={billPaidByCompany}
+                            onChange={() => {
+                              setBillForm((prev) => ({
+                                ...prev,
+                                member_ids: billPaidByCompany
+                                  ? defaultMemberId()
+                                    ? [defaultMemberId()]
+                                    : []
+                                  : [companyMember.id],
+                              }))
+                            }}
+                          />
+                          <span>Pagar pela empresa</span>
+                        </label>
+                      ) : null}
+                    </div>
                     <label>
                       Obs.
                       <input
@@ -2593,27 +3368,9 @@ export default function App() {
                     onChange={(date) => setTxForm((p) => ({ ...p, date }))}
                   />
                   <div className="bill-form-fields">
-                    <label>
-                      Pessoa
-                      <select
-                        value={txForm.member_id || ''}
-                        onChange={(e) => {
-                          const member_id = Number(e.target.value)
-                          setTxForm((p) => ({
-                            ...p,
-                            member_id,
-                            wallet_id: preferredSpendWallet(wallets, member_id)?.id ?? 0,
-                          }))
-                        }}
-                      >
-                        <option value="">Sem vínculo</option>
-                        {members.map((member) => (
-                          <option key={member.id} value={member.id}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <p className="meta" style={{ margin: '0 0 0.35rem' }}>
+                      Lançamento de {memberById.get(txForm.member_id)?.name ?? activeMember?.name ?? 'você'}
+                    </p>
                     <label>
                       {sheet === 'expense' ? 'Como pagou' : 'Onde entra o saldo'}
                       <select
@@ -2624,9 +3381,9 @@ export default function App() {
                         }
                       >
                         <option value="">Escolha a conta</option>
-                        {spendWalletsForMember(wallets, txForm.member_id).map((wallet) => (
+                        {spendWalletsForMember(wallets, txForm.member_id, sheet !== 'expense').map((wallet) => (
                           <option key={wallet.id} value={wallet.id}>
-                            {wallet.name} · {walletKindLabel(wallet.kind)} · {currency.format(wallet.balance)}
+                            {walletSpendLabel(wallet)}
                           </option>
                         ))}
                       </select>
@@ -2682,6 +3439,84 @@ export default function App() {
           </div>
         </div>
       )}
+      {accountSwitcher && activeMember ? (
+        <div className="sheet" role="dialog" aria-modal="true" onClick={() => setAccountSwitcher(false)}>
+          <div className="sheet-panel" onClick={(e) => e.stopPropagation()}>
+            <header>
+              <h2>Conta neste dispositivo</h2>
+              <button type="button" className="ghost" onClick={() => setAccountSwitcher(false)}>
+                Fechar
+              </button>
+            </header>
+            <p className="meta" style={{ marginBottom: '0.85rem' }}>
+              Você está como <strong>{activeMember.name}</strong>. Troque sem precisar escolher quem paga em cada lançamento.
+            </p>
+            {savedAccounts.length > 0 ? (
+              <div className="account-switch-list">
+                {savedAccounts.map((account) => {
+                  const member = personMembers.find((item) => item.id === account.memberId)
+                  if (!member) return null
+                  return (
+                    <div key={account.memberId} className="account-switch-row">
+                      <button
+                        type="button"
+                        className={`account-login-row ${member.id === activeMemberId ? 'active' : ''}`}
+                        onClick={() => loginAs(member, true)}
+                      >
+                        <span className="account-login-avatar" aria-hidden>
+                          {member.name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span className="account-login-row-main">
+                          <strong>{member.name}</strong>
+                          <span>{member.id === activeMemberId ? 'em uso' : 'conta salva'}</span>
+                        </span>
+                      </button>
+                      {member.id !== activeMemberId ? (
+                        <button
+                          type="button"
+                          className="icon-btn danger"
+                          aria-label={`Esquecer ${member.name}`}
+                          onClick={() => forgetSavedAccount(member.id)}
+                        >
+                          <TrashIcon />
+                        </button>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null}
+            {personMembers.some((member) => !savedAccounts.some((item) => item.memberId === member.id)) ? (
+              <>
+                <p className="section-label">Entrar com outra pessoa</p>
+                <div className="account-login-list">
+                  {personMembers
+                    .filter((member) => !savedAccounts.some((item) => item.memberId === member.id))
+                    .map((member) => (
+                      <button
+                        key={member.id}
+                        type="button"
+                        className="account-login-row"
+                        onClick={() => loginAs(member, true)}
+                      >
+                        <span className="account-login-avatar" aria-hidden>
+                          {member.name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span className="account-login-row-main">
+                          <strong>{member.name}</strong>
+                          <span>salvar neste dispositivo</span>
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              </>
+            ) : null}
+            <button type="button" className="ghost" style={{ marginTop: '0.85rem' }} onClick={logoutAccount}>
+              Sair desta conta
+            </button>
+          </div>
+        </div>
+      ) : null}
       {quickLaunch ? (
         <QuickLaunch
           saving={quickLaunchSaving}
@@ -2723,6 +3558,8 @@ export default function App() {
           </div>
         </div>
       ) : null}
-    </div>
+      </div>
+      ) : null}
+    </>
   )
 }

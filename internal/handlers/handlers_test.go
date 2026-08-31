@@ -270,13 +270,15 @@ func (m *memoryStore) applyTxWalletLocked(previous, next *models.Transaction) er
 			return repository.ErrNotFound
 		}
 		if tx.MemberID != nil && wallet.MemberID != nil && *wallet.MemberID != *tx.MemberID {
-			return repository.ErrWalletOwner
+			if !models.IsCompanyWallet(wallet.Kind) {
+				return repository.ErrWalletOwner
+			}
 		}
 		delta := tx.Amount
 		if tx.Type != models.TransactionTypeIncome {
 			delta = -tx.Amount
 		}
-		wallet.Balance = math.Round((wallet.Balance+sign*delta)*100) / 100
+		wallet = models.ApplyWalletDelta(wallet, sign*delta)
 		m.wallets[wallet.ID] = wallet
 		return nil
 	}
@@ -381,7 +383,7 @@ func (m *memoryStore) SetBillPaid(_ context.Context, billID, year, month int, pa
 	if existing, exists := m.payments[key]; exists && existing.WalletID != nil {
 		wallet, wok := m.wallets[*existing.WalletID]
 		if wok {
-			wallet.Balance = math.Round((wallet.Balance+existing.Amount)*100) / 100
+			wallet = models.ApplyWalletDelta(wallet, existing.Amount)
 			m.wallets[wallet.ID] = wallet
 		}
 	}
@@ -405,7 +407,9 @@ func (m *memoryStore) SetBillPaid(_ context.Context, billID, year, month int, pa
 			return repository.ErrNotFound
 		}
 		if w.MemberID == nil || *w.MemberID != *paidByMemberID {
-			return repository.ErrWalletOwner
+			if !models.IsCompanyWallet(w.Kind) {
+				return repository.ErrWalletOwner
+			}
 		}
 		chosen = w
 		ok = true
@@ -414,7 +418,7 @@ func (m *memoryStore) SetBillPaid(_ context.Context, billID, year, month int, pa
 		return repository.ErrNoWallet
 	}
 	amount := bill.ChargeForMonth(year, month)
-	chosen.Balance = math.Round((chosen.Balance-amount)*100) / 100
+	chosen = models.ApplyWalletDelta(chosen, -amount)
 	m.wallets[chosen.ID] = chosen
 	wid := chosen.ID
 	m.payments[key] = models.BillPayment{
@@ -577,12 +581,16 @@ func (m *memoryStore) CreateWallet(_ context.Context, input models.CreateWalletI
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w := models.Wallet{
-		ID:        m.nextWalletID,
-		Name:      strings.TrimSpace(input.Name),
-		Kind:      models.NormalizeWalletKind(input.Kind),
-		MemberID:  input.MemberID,
-		Balance:   input.Balance,
-		CreatedAt: time.Now().UTC(),
+		ID:             m.nextWalletID,
+		Name:           strings.TrimSpace(input.Name),
+		Kind:           models.NormalizeWalletKind(input.Kind),
+		MemberID:       input.MemberID,
+		Balance:        input.Balance,
+		ClosingDay:     input.ClosingDay,
+		DueDay:         input.DueDay,
+		CreditLimit:    input.CreditLimit,
+		InvoiceBalance: input.InvoiceBalance,
+		CreatedAt:      time.Now().UTC(),
 	}
 	m.nextWalletID++
 	m.wallets[w.ID] = w
@@ -620,6 +628,10 @@ func (m *memoryStore) UpdateWallet(_ context.Context, id int, input models.Updat
 	existing.Kind = models.NormalizeWalletKind(input.Kind)
 	existing.MemberID = input.MemberID
 	existing.Balance = input.Balance
+	existing.ClosingDay = input.ClosingDay
+	existing.DueDay = input.DueDay
+	existing.CreditLimit = input.CreditLimit
+	existing.InvoiceBalance = input.InvoiceBalance
 	m.wallets[id] = existing
 	return existing, nil
 }
@@ -632,6 +644,40 @@ func (m *memoryStore) DeleteWallet(_ context.Context, id int) error {
 	}
 	delete(m.wallets, id)
 	return nil
+}
+
+func (m *memoryStore) PayWalletInvoice(_ context.Context, creditWalletID int, input models.PayInvoiceInput) (models.Wallet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	amount := math.Round(input.Amount*100) / 100
+	if !(amount > 0) || input.FromWalletID < 1 || input.FromWalletID == creditWalletID {
+		return models.Wallet{}, repository.ErrInvalidAmount
+	}
+	credit, ok := m.wallets[creditWalletID]
+	if !ok {
+		return models.Wallet{}, repository.ErrNotFound
+	}
+	if !models.IsCredit(credit.Kind) {
+		return models.Wallet{}, repository.ErrNotCredit
+	}
+	if credit.InvoiceBalance <= 0 {
+		return models.Wallet{}, repository.ErrInvoiceEmpty
+	}
+	from, ok := m.wallets[input.FromWalletID]
+	if !ok {
+		return models.Wallet{}, repository.ErrNotFound
+	}
+	if models.IsCredit(from.Kind) {
+		return models.Wallet{}, repository.ErrNotCredit
+	}
+	if amount > credit.InvoiceBalance {
+		amount = credit.InvoiceBalance
+	}
+	from = models.ApplyWalletDelta(from, -amount)
+	credit = models.ApplyWalletDelta(credit, amount)
+	m.wallets[from.ID] = from
+	m.wallets[credit.ID] = credit
+	return credit, nil
 }
 
 type stubCDI struct {

@@ -75,6 +75,7 @@ export const api = {
     interest_rate?: number
     category_id: number
     member_ids: number[]
+    wallet_id?: number | null
     due_day: number
     frequency: BillFrequency
     recurrence: BillRecurrence
@@ -91,6 +92,7 @@ export const api = {
       interest_rate?: number
       category_id: number
       member_ids: number[]
+      wallet_id?: number | null
       due_day: number
       frequency: BillFrequency
       recurrence: BillRecurrence
@@ -200,6 +202,10 @@ export const api = {
     kind: WalletKind | string
     member_id?: number | null
     balance: number
+    closing_day?: number | null
+    due_day?: number | null
+    credit_limit?: number
+    invoice_balance?: number
   }) => request<Wallet>('/wallets', { method: 'POST', body: JSON.stringify(body) }),
   updateWallet: (
     id: number,
@@ -208,7 +214,13 @@ export const api = {
       kind: WalletKind | string
       member_id?: number | null
       balance: number
+      closing_day?: number | null
+      due_day?: number | null
+      credit_limit?: number
+      invoice_balance?: number
     },
   ) => request<Wallet>(`/wallets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteWallet: (id: number) => request<void>(`/wallets/${id}`, { method: 'DELETE' }),
+  payWalletInvoice: (id: number, body: { amount: number; from_wallet_id: number }) =>
+    request<Wallet>(`/wallets/${id}/pay-invoice`, { method: 'POST', body: JSON.stringify(body) }),
 }

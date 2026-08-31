@@ -19,19 +19,26 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 	}
 	defer tx.Rollback()
 
+	if bill.WalletID != nil {
+		if _, err := s.GetWalletByID(ctx, *bill.WalletID); err != nil {
+			return models.Bill{}, err
+		}
+	}
+
 	const query = `
 		INSERT INTO bills (
 			name, amount, amount_mode, interest_rate, category_id, member_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at
-		) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+			recurrence, start_month, end_month, notes, created_at, wallet_id
+		) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at
+			recurrence, start_month, end_month, notes, created_at, wallet_id
 	`
 
 	now := formatDateTime(time.Now())
 	var (
 		created   models.Bill
 		endMonth  sql.NullString
+		walletID  sql.NullInt64
 		createdAt string
 	)
 	err = tx.QueryRowContext(
@@ -49,6 +56,7 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 		nullString(bill.EndMonth),
 		strings.TrimSpace(bill.Notes),
 		now,
+		nullInt(bill.WalletID),
 	).Scan(
 		&created.ID,
 		&created.Name,
@@ -63,6 +71,7 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 		&endMonth,
 		&created.Notes,
 		&createdAt,
+		&walletID,
 	)
 	if err != nil {
 		return models.Bill{}, fmt.Errorf("create bill: %w", err)
@@ -76,6 +85,7 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 	}
 
 	created.MemberIDs = normalizeMemberIDs(bill.MemberIDs)
+	created.WalletID = fromNullInt(walletID)
 	if endMonth.Valid {
 		value := endMonth.String
 		created.EndMonth = &value
@@ -92,7 +102,7 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 func (s *Store) ListBills(ctx context.Context) ([]models.Bill, error) {
 	const query = `
 		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at
+			recurrence, start_month, end_month, notes, created_at, wallet_id
 		FROM bills
 		ORDER BY due_day ASC, name ASC
 	`
@@ -118,7 +128,7 @@ func (s *Store) ListBillsActiveInMonth(ctx context.Context, year, month int) ([]
 func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 	const query = `
 		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at
+			recurrence, start_month, end_month, notes, created_at, wallet_id
 		FROM bills
 		WHERE id = ?
 	`
@@ -126,6 +136,7 @@ func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 	var (
 		bill      models.Bill
 		endMonth  sql.NullString
+		walletID  sql.NullInt64
 		createdAt string
 	)
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
@@ -142,6 +153,7 @@ func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 		&endMonth,
 		&bill.Notes,
 		&createdAt,
+		&walletID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.Bill{}, ErrNotFound
@@ -155,6 +167,7 @@ func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 		return models.Bill{}, err
 	}
 	bill.MemberIDs = members
+	bill.WalletID = fromNullInt(walletID)
 	if endMonth.Valid {
 		value := endMonth.String
 		bill.EndMonth = &value
@@ -175,18 +188,25 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 	}
 	defer tx.Rollback()
 
+	if bill.WalletID != nil {
+		if _, err := s.GetWalletByID(ctx, *bill.WalletID); err != nil {
+			return models.Bill{}, err
+		}
+	}
+
 	const query = `
 		UPDATE bills
 		SET name = ?, amount = ?, amount_mode = ?, interest_rate = ?, category_id = ?, member_id = NULL, due_day = ?,
-			frequency = ?, recurrence = ?, start_month = ?, end_month = ?, notes = ?
+			frequency = ?, recurrence = ?, start_month = ?, end_month = ?, notes = ?, wallet_id = ?
 		WHERE id = ?
 		RETURNING id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at
+			recurrence, start_month, end_month, notes, created_at, wallet_id
 	`
 
 	var (
 		updated   models.Bill
 		endMonth  sql.NullString
+		walletID  sql.NullInt64
 		createdAt string
 	)
 	err = tx.QueryRowContext(
@@ -203,6 +223,7 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 		bill.StartMonth,
 		nullString(bill.EndMonth),
 		strings.TrimSpace(bill.Notes),
+		nullInt(bill.WalletID),
 		id,
 	).Scan(
 		&updated.ID,
@@ -218,6 +239,7 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 		&endMonth,
 		&updated.Notes,
 		&createdAt,
+		&walletID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.Bill{}, ErrNotFound
@@ -234,6 +256,7 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 	}
 
 	updated.MemberIDs = normalizeMemberIDs(bill.MemberIDs)
+	updated.WalletID = fromNullInt(walletID)
 	if endMonth.Valid {
 		value := endMonth.String
 		updated.EndMonth = &value
@@ -276,6 +299,7 @@ func (s *Store) scanBills(ctx context.Context, query string, args ...any) ([]mod
 		var (
 			bill      models.Bill
 			endMonth  sql.NullString
+			walletID  sql.NullInt64
 			createdAt string
 		)
 		if err := rows.Scan(
@@ -292,9 +316,11 @@ func (s *Store) scanBills(ctx context.Context, query string, args ...any) ([]mod
 			&endMonth,
 			&bill.Notes,
 			&createdAt,
+			&walletID,
 		); err != nil {
 			return nil, fmt.Errorf("scan bill: %w", err)
 		}
+		bill.WalletID = fromNullInt(walletID)
 		if endMonth.Valid {
 			value := endMonth.String
 			bill.EndMonth = &value

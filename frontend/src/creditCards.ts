@@ -5,7 +5,7 @@ export const CREDIT_CARDS = [
   { id: 'debito', label: 'Débito' },
   { id: 'nubank', label: 'Nubank' },
   { id: 'bb', label: 'Banco do Brasil' },
-  { id: 'mercado-livre', label: 'Mercado Livre' },
+  { id: 'mercado-livre', label: 'Mercado Pago' },
   { id: 'itau', label: 'Itaú' },
   { id: 'bradesco', label: 'Bradesco' },
   { id: 'santander', label: 'Santander' },
@@ -15,6 +15,17 @@ export const CREDIT_CARDS = [
   { id: 'caixa', label: 'Caixa' },
   { id: 'will', label: 'Will Bank' },
   { id: 'neon', label: 'Neon' },
+] as const
+
+export const CREDIT_ISSUERS = [
+  { id: 'nubank', label: 'Nubank' },
+  { id: 'mercado-pago', label: 'Mercado Pago' },
+  { id: 'bb', label: 'Banco do Brasil' },
+  { id: 'itau', label: 'Itaú' },
+  { id: 'inter', label: 'Inter' },
+  { id: 'c6', label: 'C6 Bank' },
+  { id: 'picpay', label: 'PicPay' },
+  { id: 'outro', label: 'Outro' },
 ] as const
 
 export type CreditCardId = (typeof CREDIT_CARDS)[number]['id']

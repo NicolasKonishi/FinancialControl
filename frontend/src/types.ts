@@ -103,6 +103,7 @@ export type Bill = {
   interest_rate: number
   category_id: number
   member_ids: number[]
+  wallet_id?: number | null
   due_day: number
   frequency: BillFrequency
   recurrence: BillRecurrence
@@ -158,5 +159,9 @@ export type Wallet = {
   kind: WalletKind | string
   member_id?: number | null
   balance: number
+  closing_day?: number | null
+  due_day?: number | null
+  credit_limit?: number
+  invoice_balance?: number
   created_at: string
 }
