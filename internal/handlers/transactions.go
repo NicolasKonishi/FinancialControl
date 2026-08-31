@@ -52,13 +52,17 @@ func (h *Transactions) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, ok := h.buildFromInput(w, r, input.CategoryID, input.MemberID, input.Type, input.Description, input.Amount, input.Date)
+	tx, ok := h.buildFromInput(w, r, input.CategoryID, input.MemberID, input.WalletID, input.Type, input.Description, input.Amount, input.Date)
 	if !ok {
 		return
 	}
 
 	created, err := h.Store.CreateTransaction(r.Context(), tx)
 	if err != nil {
+		if errors.Is(err, repository.ErrWalletOwner) {
+			http.Error(w, "wallet does not belong to this person", http.StatusBadRequest)
+			return
+		}
 		writeStoreError(w, err, "transaction not found")
 		return
 	}
@@ -93,13 +97,17 @@ func (h *Transactions) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, ok := h.buildFromInput(w, r, input.CategoryID, input.MemberID, input.Type, input.Description, input.Amount, input.Date)
+	tx, ok := h.buildFromInput(w, r, input.CategoryID, input.MemberID, input.WalletID, input.Type, input.Description, input.Amount, input.Date)
 	if !ok {
 		return
 	}
 
 	updated, err := h.Store.UpdateTransaction(r.Context(), id, tx)
 	if err != nil {
+		if errors.Is(err, repository.ErrWalletOwner) {
+			http.Error(w, "wallet does not belong to this person", http.StatusBadRequest)
+			return
+		}
 		writeStoreError(w, err, "transaction not found")
 		return
 	}
@@ -125,6 +133,7 @@ func (h *Transactions) buildFromInput(
 	r *http.Request,
 	categoryID int,
 	memberID *int,
+	walletID *int,
 	txType, description string,
 	amount float64,
 	dateStr string,
@@ -172,6 +181,7 @@ func (h *Transactions) buildFromInput(
 	return models.Transaction{
 		CategoryID:  categoryID,
 		MemberID:    memberID,
+		WalletID:    walletID,
 		Type:        txType,
 		Description: strings.TrimSpace(description),
 		Amount:      amount,

@@ -1,0 +1,1 @@
+-- SQLite cannot drop columns portably; keep extra fields on downgrade.

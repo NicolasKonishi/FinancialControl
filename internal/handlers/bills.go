@@ -20,7 +20,7 @@ type BillStore interface {
 	UpdateBill(ctx context.Context, id int, bill models.Bill) (models.Bill, error)
 	DeleteBill(ctx context.Context, id int) error
 	ListBillPayments(ctx context.Context, year, month int) ([]models.BillPayment, error)
-	SetBillPaid(ctx context.Context, billID, year, month int, paid bool) error
+	SetBillPaid(ctx context.Context, billID, year, month int, paid bool, paidByMemberID, walletID *int) error
 }
 
 // Bills handles monthly bill HTTP endpoints.

@@ -14,6 +14,7 @@ type ForecastStore interface {
 	ListMembers(ctx context.Context) ([]models.Member, error)
 	ListTransactionsByMonth(ctx context.Context, year, month int) ([]models.Transaction, error)
 	ListBillsActiveInMonth(ctx context.Context, year, month int) ([]models.Bill, error)
+	ListSavingsGoals(ctx context.Context) ([]models.SavingsGoal, error)
 }
 
 // Forecast handles budget forecast endpoints.
@@ -46,7 +47,13 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var plannedSalary, extraIncome, variableExpense, plannedBills float64
+	goals, err := h.Store.ListSavingsGoals(r.Context())
+	if err != nil {
+		writeStoreError(w, err, "not found")
+		return
+	}
+
+	var plannedSalary, extraIncome, variableExpense, plannedBills, plannedSavings float64
 	for _, member := range members {
 		plannedSalary += member.MonthlySalary
 	}
@@ -60,6 +67,9 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, bill := range bills {
 		plannedBills += bill.ChargeForMonth(year, month)
+	}
+	for _, goal := range goals {
+		plannedSavings += goal.MonthlyPlan(year, month)
 	}
 
 	now := time.Now().UTC()
@@ -82,7 +92,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 
 	totalAvailable := plannedSalary + extraIncome
 	totalExpense := variableExpense + plannedBills
-	remaining := totalAvailable - totalExpense
+	remaining := totalAvailable - totalExpense - plannedSavings
 
 	projectedVariable := variableExpense
 	if daysElapsed > 0 {
@@ -110,6 +120,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		ExtraIncome:      round2(extraIncome),
 		TotalAvailable:   round2(totalAvailable),
 		PlannedBills:     round2(plannedBills),
+		PlannedSavings:   round2(plannedSavings),
 		TotalExpense:     round2(totalExpense),
 		Remaining:        round2(remaining),
 		DaysInMonth:      daysInMonth,
@@ -118,7 +129,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		ProjectedExpense: round2(projectedExpense),
 		SafeDailySpend:   round2(safeDaily),
 		ExpensePaceRatio: round2(pace),
-		ByMember:         buildMemberForecasts(members, transactions, bills, year, month),
+		ByMember:         buildMemberForecasts(members, transactions, bills, goals, year, month),
 	})
 }
 
@@ -126,11 +137,12 @@ func buildMemberForecasts(
 	members []models.Member,
 	transactions []models.Transaction,
 	bills []models.Bill,
+	goals []models.SavingsGoal,
 	year, month int,
 ) []models.MemberForecast {
 	out := make([]models.MemberForecast, 0, len(members))
 	for _, member := range members {
-		var extraIncome, variableExpense, billShare float64
+		var extraIncome, variableExpense, billShare, savingsShare float64
 		for _, tx := range transactions {
 			if tx.MemberID == nil || *tx.MemberID != member.ID {
 				continue
@@ -146,6 +158,9 @@ func buildMemberForecasts(
 			share := billShareForMember(bill, member.ID, year, month)
 			billShare += share
 		}
+		for _, goal := range goals {
+			savingsShare += savingsShareForMember(goal, member.ID, year, month)
+		}
 
 		available := member.MonthlySalary + extraIncome
 		toPay := billShare + variableExpense
@@ -156,9 +171,10 @@ func buildMemberForecasts(
 			ExtraIncome:     round2(extraIncome),
 			TotalAvailable:  round2(available),
 			BillShare:       round2(billShare),
+			SavingsShare:    round2(savingsShare),
 			VariableExpense: round2(variableExpense),
 			TotalToPay:      round2(toPay),
-			Remaining:       round2(available - toPay),
+			Remaining:       round2(available - toPay - savingsShare),
 		})
 	}
 	return out
@@ -180,6 +196,23 @@ func billShareForMember(bill models.Bill, memberID, year, month int) float64 {
 		return 0
 	}
 	return bill.ChargeForMonth(year, month) / float64(len(bill.MemberIDs))
+}
+
+func savingsShareForMember(goal models.SavingsGoal, memberID, year, month int) float64 {
+	if len(goal.MemberIDs) == 0 {
+		return 0
+	}
+	found := false
+	for _, id := range goal.MemberIDs {
+		if id == memberID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0
+	}
+	return goal.MonthlyPlan(year, month) / float64(len(goal.MemberIDs))
 }
 
 func daysIn(year, month int) int {

@@ -7,7 +7,12 @@ import type {
   Category,
   Member,
   MonthlyForecast,
+  SavingsGoal,
+  SavingsMonthAmount,
+  SavingsPlan,
   Transaction,
+  Wallet,
+  WalletKind,
 } from './types'
 
 function resolveApiUrl() {
@@ -97,7 +102,16 @@ export const api = {
   deleteBill: (id: number) => request<void>(`/bills/${id}`, { method: 'DELETE' }),
   listBillPayments: (year: number, month: number) =>
     request<BillPayment[]>(`/bills/payments?year=${year}&month=${month}`),
-  setBillPaid: (id: number, body: { year: number; month: number; paid: boolean }) =>
+  setBillPaid: (
+    id: number,
+    body: {
+      year: number
+      month: number
+      paid: boolean
+      paid_by_member_id?: number | null
+      wallet_id?: number | null
+    },
+  ) =>
     request<BillPayment | undefined>(`/bills/${id}/paid`, {
       method: 'PUT',
       body: JSON.stringify(body),
@@ -107,6 +121,7 @@ export const api = {
   createTransaction: (body: {
     category_id: number
     member_id?: number | null
+    wallet_id?: number | null
     type: 'income' | 'expense'
     description: string
     amount: number
@@ -117,6 +132,7 @@ export const api = {
     body: {
       category_id: number
       member_id?: number | null
+      wallet_id?: number | null
       type: 'income' | 'expense'
       description: string
       amount: number
@@ -127,4 +143,72 @@ export const api = {
 
   monthlyForecast: (year: number, month: number) =>
     request<MonthlyForecast>(`/forecast/monthly?year=${year}&month=${month}`),
+
+  listSavingsGoals: () => request<SavingsGoal[]>('/savings'),
+  createSavingsGoal: (body: {
+    name: string
+    target_amount: number
+    member_ids: number[]
+    notes?: string
+    end_kind: 'none' | 'date' | 'amount'
+    end_month?: string | null
+  }) => request<SavingsGoal>('/savings', { method: 'POST', body: JSON.stringify(body) }),
+  updateSavingsGoal: (
+    id: number,
+    body: {
+      name: string
+      target_amount: number
+      member_ids: number[]
+      notes?: string
+      end_kind: 'none' | 'date' | 'amount'
+      end_month?: string | null
+    },
+  ) => request<SavingsGoal>(`/savings/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteSavingsGoal: (id: number) => request<void>(`/savings/${id}`, { method: 'DELETE' }),
+  planSavings: (query: {
+    end_kind: 'none' | 'date' | 'amount'
+    target: number
+    end_month?: string
+    members?: number
+    saved?: number
+  }) => {
+    const params = new URLSearchParams({
+      end_kind: query.end_kind,
+      target: String(query.target),
+    })
+    if (query.end_month) params.set('end_month', query.end_month)
+    if (query.members) params.set('members', String(query.members))
+    if (query.saved) params.set('saved', String(query.saved))
+    return request<SavingsPlan>(`/savings/plan?${params}`)
+  },
+  listSavingsMonths: (year: number, month: number) =>
+    request<SavingsMonthAmount[]>(`/savings/months?year=${year}&month=${month}`),
+  setSavingsMonth: (id: number, body: { year: number; month: number; amount: number }) =>
+    request<SavingsMonthAmount | undefined>(`/savings/${id}/month`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  adjustSavings: (id: number, body: { amount: number; wallet_id?: number | null }) =>
+    request<SavingsGoal>(`/savings/${id}/adjust`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  listWallets: () => request<Wallet[]>('/wallets'),
+  createWallet: (body: {
+    name: string
+    kind: WalletKind | string
+    member_id?: number | null
+    balance: number
+  }) => request<Wallet>('/wallets', { method: 'POST', body: JSON.stringify(body) }),
+  updateWallet: (
+    id: number,
+    body: {
+      name: string
+      kind: WalletKind | string
+      member_id?: number | null
+      balance: number
+    },
+  ) => request<Wallet>(`/wallets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteWallet: (id: number) => request<void>(`/wallets/${id}`, { method: 'DELETE' }),
 }

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/NicolasKonishi/FinancialControl/internal/analysis"
+	"github.com/NicolasKonishi/FinancialControl/internal/cdi"
 	"github.com/NicolasKonishi/FinancialControl/internal/handlers"
 	"github.com/NicolasKonishi/FinancialControl/internal/middleware"
 	"github.com/NicolasKonishi/FinancialControl/internal/repository"
@@ -13,6 +14,7 @@ import (
 type Dependencies struct {
 	Store          *repository.Store
 	AnalysisClient *analysis.Client
+	CDI            *cdi.Client
 }
 
 // New builds the HTTP handler with routes and middleware.
@@ -35,6 +37,15 @@ func New(deps Dependencies) http.Handler {
 		Client:       deps.AnalysisClient,
 	}
 	forecast := &handlers.Forecast{Store: deps.Store}
+	savings := &handlers.Savings{
+		Store:   deps.Store,
+		Members: deps.Store,
+		CDI:     deps.CDI,
+	}
+	wallets := &handlers.Wallets{
+		Store:   deps.Store,
+		Members: deps.Store,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handlers.Health)
@@ -58,6 +69,18 @@ func New(deps Dependencies) http.Handler {
 	mux.HandleFunc("GET /transactions/{id}", transactions.GetByID)
 	mux.HandleFunc("PUT /transactions/{id}", transactions.Update)
 	mux.HandleFunc("DELETE /transactions/{id}", transactions.Delete)
+
+	mux.HandleFunc("/savings", savings.ListOrCreate)
+	mux.HandleFunc("GET /savings/plan", savings.Plan)
+	mux.HandleFunc("GET /savings/months", savings.ListMonthAmounts)
+	mux.HandleFunc("PUT /savings/{id}", savings.Update)
+	mux.HandleFunc("PUT /savings/{id}/month", savings.SetMonthAmount)
+	mux.HandleFunc("PUT /savings/{id}/adjust", savings.Adjust)
+	mux.HandleFunc("DELETE /savings/{id}", savings.Delete)
+
+	mux.HandleFunc("/wallets", wallets.ListOrCreate)
+	mux.HandleFunc("PUT /wallets/{id}", wallets.Update)
+	mux.HandleFunc("DELETE /wallets/{id}", wallets.Delete)
 
 	mux.HandleFunc("GET /analysis/monthly", analysisHandler.Monthly)
 	mux.HandleFunc("GET /forecast/monthly", forecast.Monthly)

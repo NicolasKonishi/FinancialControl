@@ -41,6 +41,7 @@ export type Transaction = {
   id: number
   category_id: number
   member_id?: number | null
+  wallet_id?: number | null
   type: 'income' | 'expense'
   description: string
   amount: number
@@ -55,6 +56,7 @@ export type MemberForecast = {
   extra_income: number
   total_available: number
   bill_share: number
+  savings_share: number
   variable_expense: number
   total_to_pay: number
   remaining: number
@@ -67,6 +69,7 @@ export type MonthlyForecast = {
   extra_income: number
   total_available: number
   planned_bills: number
+  planned_savings: number
   total_expense: number
   remaining: number
   days_in_month: number
@@ -87,6 +90,9 @@ export type BillPayment = {
   year: number
   month: number
   paid_at: string
+  paid_by_member_id?: number | null
+  wallet_id?: number | null
+  amount?: number
 }
 
 export type Bill = {
@@ -103,5 +109,54 @@ export type Bill = {
   start_month: string
   end_month?: string | null
   notes?: string
+  created_at: string
+}
+
+export type SavingsEndKind = 'none' | 'date' | 'amount'
+
+export type SavingsGoal = {
+  id: number
+  name: string
+  target_amount: number
+  monthly_amount: number
+  saved_amount: number
+  member_ids: number[]
+  notes?: string
+  end_kind: SavingsEndKind
+  end_month?: string | null
+  cdi_annual: number
+  yield_annual: number
+  opening_amount?: number
+  created_at: string
+}
+
+export type SavingsPlan = {
+  months: number
+  monthly_amount: number
+  cdi_annual: number
+  yield_factor: number
+  yield_annual: number
+  target_amount: number
+  per_member: number
+  member_count: number
+  used_default_term: boolean
+}
+
+export type SavingsMonthAmount = {
+  goal_id: number
+  year: number
+  month: number
+  amount: number
+  saved_at: string
+}
+
+export type WalletKind = 'checking' | 'savings' | 'benefit' | 'company' | 'credit'
+
+export type Wallet = {
+  id: number
+  name: string
+  kind: WalletKind | string
+  member_id?: number | null
+  balance: number
   created_at: string
 }

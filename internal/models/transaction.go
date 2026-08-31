@@ -13,6 +13,7 @@ type Transaction struct {
 	ID          int       `json:"id"`
 	CategoryID  int       `json:"category_id"`
 	MemberID    *int      `json:"member_id,omitempty"`
+	WalletID    *int      `json:"wallet_id,omitempty"`
 	Type        string    `json:"type"`
 	Description string    `json:"description"`
 	Amount      float64   `json:"amount"`
@@ -24,6 +25,7 @@ type Transaction struct {
 type CreateTransactionInput struct {
 	CategoryID  int     `json:"category_id"`
 	MemberID    *int    `json:"member_id"`
+	WalletID    *int    `json:"wallet_id"`
 	Type        string  `json:"type"`
 	Description string  `json:"description"`
 	Amount      float64 `json:"amount"`
@@ -34,6 +36,7 @@ type CreateTransactionInput struct {
 type UpdateTransactionInput struct {
 	CategoryID  int     `json:"category_id"`
 	MemberID    *int    `json:"member_id"`
+	WalletID    *int    `json:"wallet_id"`
 	Type        string  `json:"type"`
 	Description string  `json:"description"`
 	Amount      float64 `json:"amount"`

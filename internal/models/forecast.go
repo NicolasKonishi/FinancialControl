@@ -8,6 +8,7 @@ type MonthlyForecast struct {
 	ExtraIncome      float64          `json:"extra_income"`
 	TotalAvailable   float64          `json:"total_available"`
 	PlannedBills     float64          `json:"planned_bills"`
+	PlannedSavings   float64          `json:"planned_savings"`
 	TotalExpense     float64          `json:"total_expense"`
 	Remaining        float64          `json:"remaining"`
 	DaysInMonth      int              `json:"days_in_month"`
@@ -27,6 +28,7 @@ type MemberForecast struct {
 	ExtraIncome     float64 `json:"extra_income"`
 	TotalAvailable  float64 `json:"total_available"`
 	BillShare       float64 `json:"bill_share"`
+	SavingsShare    float64 `json:"savings_share"`
 	VariableExpense float64 `json:"variable_expense"`
 	TotalToPay      float64 `json:"total_to_pay"`
 	Remaining       float64 `json:"remaining"`

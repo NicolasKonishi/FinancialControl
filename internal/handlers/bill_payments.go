@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/NicolasKonishi/FinancialControl/internal/models"
+	"github.com/NicolasKonishi/FinancialControl/internal/repository"
 )
 
 // ListPayments handles GET /bills/payments?year=&month=.
@@ -43,7 +45,30 @@ func (h *Bills) SetPaid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Store.SetBillPaid(r.Context(), id, input.Year, input.Month, input.Paid); err != nil {
+	if input.Paid {
+		if input.PaidByMemberID == nil || *input.PaidByMemberID < 1 {
+			http.Error(w, "paid_by_member_id is required", http.StatusBadRequest)
+			return
+		}
+		if _, err := h.Members.GetMemberByID(r.Context(), *input.PaidByMemberID); err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				http.Error(w, "member not found", http.StatusBadRequest)
+				return
+			}
+			writeStoreError(w, err, "member not found")
+			return
+		}
+	}
+
+	if err := h.Store.SetBillPaid(r.Context(), id, input.Year, input.Month, input.Paid, input.PaidByMemberID, input.WalletID); err != nil {
+		if errors.Is(err, repository.ErrNoWallet) {
+			http.Error(w, "this person has no account to debit", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, repository.ErrWalletOwner) {
+			http.Error(w, "wallet does not belong to this person", http.StatusBadRequest)
+			return
+		}
 		writeStoreError(w, err, "bill not found")
 		return
 	}

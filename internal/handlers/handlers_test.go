@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,10 +24,15 @@ type memoryStore struct {
 	members      map[int]models.Member
 	bills        map[int]models.Bill
 	payments     map[string]models.BillPayment
+	goals        map[int]models.SavingsGoal
+	goalMonths   map[string]models.SavingsMonthAmount
+	wallets      map[int]models.Wallet
 	nextCatID    int
 	nextTxID     int
 	nextMemberID int
 	nextBillID   int
+	nextGoalID   int
+	nextWalletID int
 }
 
 func newMemoryStore() *memoryStore {
@@ -36,10 +42,15 @@ func newMemoryStore() *memoryStore {
 		members:      make(map[int]models.Member),
 		bills:        make(map[int]models.Bill),
 		payments:     make(map[string]models.BillPayment),
+		goals:        make(map[int]models.SavingsGoal),
+		goalMonths:   make(map[string]models.SavingsMonthAmount),
+		wallets:      make(map[int]models.Wallet),
 		nextCatID:    1,
 		nextTxID:     1,
 		nextMemberID: 1,
 		nextBillID:   1,
+		nextGoalID:   1,
+		nextWalletID: 1,
 	}
 }
 
@@ -176,6 +187,9 @@ func (m *memoryStore) SumMonthlySalaries(_ context.Context) (float64, error) {
 func (m *memoryStore) CreateTransaction(_ context.Context, tx models.Transaction) (models.Transaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.applyTxWalletLocked(nil, &tx); err != nil {
+		return models.Transaction{}, err
+	}
 	tx.ID = m.nextTxID
 	tx.CreatedAt = time.Now().UTC()
 	m.nextTxID++
@@ -223,6 +237,9 @@ func (m *memoryStore) UpdateTransaction(_ context.Context, id int, tx models.Tra
 	if !ok {
 		return models.Transaction{}, repository.ErrNotFound
 	}
+	if err := m.applyTxWalletLocked(&existing, &tx); err != nil {
+		return models.Transaction{}, err
+	}
 	tx.ID = id
 	tx.CreatedAt = existing.CreatedAt
 	m.transactions[id] = tx
@@ -232,11 +249,41 @@ func (m *memoryStore) UpdateTransaction(_ context.Context, id int, tx models.Tra
 func (m *memoryStore) DeleteTransaction(_ context.Context, id int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.transactions[id]; !ok {
+	existing, ok := m.transactions[id]
+	if !ok {
 		return repository.ErrNotFound
+	}
+	if err := m.applyTxWalletLocked(&existing, nil); err != nil {
+		return err
 	}
 	delete(m.transactions, id)
 	return nil
+}
+
+func (m *memoryStore) applyTxWalletLocked(previous, next *models.Transaction) error {
+	move := func(tx *models.Transaction, sign float64) error {
+		if tx == nil || tx.WalletID == nil {
+			return nil
+		}
+		wallet, ok := m.wallets[*tx.WalletID]
+		if !ok {
+			return repository.ErrNotFound
+		}
+		if tx.MemberID != nil && wallet.MemberID != nil && *wallet.MemberID != *tx.MemberID {
+			return repository.ErrWalletOwner
+		}
+		delta := tx.Amount
+		if tx.Type != models.TransactionTypeIncome {
+			delta = -tx.Amount
+		}
+		wallet.Balance = math.Round((wallet.Balance+sign*delta)*100) / 100
+		m.wallets[wallet.ID] = wallet
+		return nil
+	}
+	if err := move(previous, -1); err != nil {
+		return err
+	}
+	return move(next, 1)
 }
 
 func (m *memoryStore) CreateBill(_ context.Context, bill models.Bill) (models.Bill, error) {
@@ -323,24 +370,276 @@ func (m *memoryStore) ListBillPayments(_ context.Context, year, month int) ([]mo
 	return out, nil
 }
 
-func (m *memoryStore) SetBillPaid(_ context.Context, billID, year, month int, paid bool) error {
+func (m *memoryStore) SetBillPaid(_ context.Context, billID, year, month int, paid bool, paidByMemberID, walletID *int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.bills[billID]; !ok {
+	bill, ok := m.bills[billID]
+	if !ok {
 		return repository.ErrNotFound
 	}
 	key := paymentKey(billID, year, month)
+	if existing, exists := m.payments[key]; exists && existing.WalletID != nil {
+		wallet, wok := m.wallets[*existing.WalletID]
+		if wok {
+			wallet.Balance = math.Round((wallet.Balance+existing.Amount)*100) / 100
+			m.wallets[wallet.ID] = wallet
+		}
+	}
 	if !paid {
 		delete(m.payments, key)
 		return nil
 	}
+	if paidByMemberID == nil || *paidByMemberID < 1 {
+		return fmt.Errorf("paid_by_member_id is required")
+	}
+	var candidates []models.Wallet
+	for _, wallet := range m.wallets {
+		if wallet.MemberID != nil && *wallet.MemberID == *paidByMemberID {
+			candidates = append(candidates, wallet)
+		}
+	}
+	chosen, ok := models.PreferredWallet(candidates)
+	if walletID != nil && *walletID > 0 {
+		w, wok := m.wallets[*walletID]
+		if !wok {
+			return repository.ErrNotFound
+		}
+		if w.MemberID == nil || *w.MemberID != *paidByMemberID {
+			return repository.ErrWalletOwner
+		}
+		chosen = w
+		ok = true
+	}
+	if !ok {
+		return repository.ErrNoWallet
+	}
+	amount := bill.ChargeForMonth(year, month)
+	chosen.Balance = math.Round((chosen.Balance-amount)*100) / 100
+	m.wallets[chosen.ID] = chosen
+	wid := chosen.ID
 	m.payments[key] = models.BillPayment{
-		BillID: billID,
-		Year:   year,
-		Month:  month,
-		PaidAt: time.Now().UTC(),
+		BillID:         billID,
+		Year:           year,
+		Month:          month,
+		PaidAt:         time.Now().UTC(),
+		PaidByMemberID: paidByMemberID,
+		WalletID:       &wid,
+		Amount:         amount,
 	}
 	return nil
+}
+
+func goalMonthKey(goalID, year, month int) string {
+	return fmt.Sprintf("g-%d-%d-%d", goalID, year, month)
+}
+
+func (m *memoryStore) CreateSavingsGoal(_ context.Context, goal models.SavingsGoal) (models.SavingsGoal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	goal.ID = m.nextGoalID
+	goal.CreatedAt = time.Now().UTC()
+	if goal.MemberIDs == nil {
+		goal.MemberIDs = []int{}
+	}
+	goal.SavedAmount = 0
+	m.nextGoalID++
+	m.goals[goal.ID] = goal
+	goal.SavedAmount = goal.OpeningAmount
+	return goal, nil
+}
+
+func (m *memoryStore) ListSavingsGoals(_ context.Context) ([]models.SavingsGoal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.SavingsGoal, 0, len(m.goals))
+	for _, goal := range m.goals {
+		goal.SavedAmount = m.sumSavedLocked(goal.ID)
+		out = append(out, goal)
+	}
+	return out, nil
+}
+
+func (m *memoryStore) GetSavingsGoalByID(_ context.Context, id int) (models.SavingsGoal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	goal, ok := m.goals[id]
+	if !ok {
+		return models.SavingsGoal{}, repository.ErrNotFound
+	}
+	goal.SavedAmount = m.sumSavedLocked(id)
+	return goal, nil
+}
+
+func (m *memoryStore) UpdateSavingsGoal(_ context.Context, id int, goal models.SavingsGoal) (models.SavingsGoal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.goals[id]
+	if !ok {
+		return models.SavingsGoal{}, repository.ErrNotFound
+	}
+	goal.ID = id
+	goal.CreatedAt = existing.CreatedAt
+	if goal.MemberIDs == nil {
+		goal.MemberIDs = []int{}
+	}
+	goal.SavedAmount = m.sumSavedLocked(id)
+	m.goals[id] = goal
+	return goal, nil
+}
+
+func (m *memoryStore) DeleteSavingsGoal(_ context.Context, id int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.goals[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(m.goals, id)
+	for key, item := range m.goalMonths {
+		if item.GoalID == id {
+			delete(m.goalMonths, key)
+		}
+	}
+	return nil
+}
+
+func (m *memoryStore) ListSavingsMonthAmounts(_ context.Context, year, month int) ([]models.SavingsMonthAmount, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.SavingsMonthAmount, 0)
+	for _, item := range m.goalMonths {
+		if item.Year == year && item.Month == month {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryStore) SetSavingsMonthAmount(_ context.Context, goalID, year, month int, amount float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.goals[goalID]; !ok {
+		return repository.ErrNotFound
+	}
+	key := goalMonthKey(goalID, year, month)
+	if amount <= 0 {
+		delete(m.goalMonths, key)
+		return nil
+	}
+	m.goalMonths[key] = models.SavingsMonthAmount{
+		GoalID:  goalID,
+		Year:    year,
+		Month:   month,
+		Amount:  amount,
+		SavedAt: time.Now().UTC(),
+	}
+	return nil
+}
+
+func (m *memoryStore) AdjustSavings(_ context.Context, goalID int, amount float64, walletID *int) (models.SavingsGoal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	goal, ok := m.goals[goalID]
+	if !ok {
+		return models.SavingsGoal{}, repository.ErrNotFound
+	}
+	if m.sumSavedLocked(goalID)+amount < -0.005 {
+		return models.SavingsGoal{}, repository.ErrInsufficient
+	}
+	if walletID != nil && *walletID > 0 {
+		wallet, wok := m.wallets[*walletID]
+		if !wok {
+			return models.SavingsGoal{}, repository.ErrNotFound
+		}
+		if !models.WalletCanFundGoal(wallet, goal.MemberIDs) {
+			return models.SavingsGoal{}, repository.ErrWalletOwner
+		}
+		wallet.Balance = math.Round((wallet.Balance-amount)*100) / 100
+		m.wallets[wallet.ID] = wallet
+	}
+	goal.OpeningAmount = math.Round((goal.OpeningAmount+amount)*100) / 100
+	m.goals[goalID] = goal
+	goal.SavedAmount = m.sumSavedLocked(goalID)
+	goal.ApplyYield()
+	return goal, nil
+}
+
+func (m *memoryStore) sumSavedLocked(goalID int) float64 {
+	total := m.goals[goalID].OpeningAmount
+	for _, item := range m.goalMonths {
+		if item.GoalID == goalID {
+			total += item.Amount
+		}
+	}
+	return total
+}
+
+func (m *memoryStore) CreateWallet(_ context.Context, input models.CreateWalletInput) (models.Wallet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w := models.Wallet{
+		ID:        m.nextWalletID,
+		Name:      strings.TrimSpace(input.Name),
+		Kind:      models.NormalizeWalletKind(input.Kind),
+		MemberID:  input.MemberID,
+		Balance:   input.Balance,
+		CreatedAt: time.Now().UTC(),
+	}
+	m.nextWalletID++
+	m.wallets[w.ID] = w
+	return w, nil
+}
+
+func (m *memoryStore) ListWallets(_ context.Context) ([]models.Wallet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.Wallet, 0, len(m.wallets))
+	for _, w := range m.wallets {
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+func (m *memoryStore) GetWalletByID(_ context.Context, id int) (models.Wallet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, ok := m.wallets[id]
+	if !ok {
+		return models.Wallet{}, repository.ErrNotFound
+	}
+	return w, nil
+}
+
+func (m *memoryStore) UpdateWallet(_ context.Context, id int, input models.UpdateWalletInput) (models.Wallet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.wallets[id]
+	if !ok {
+		return models.Wallet{}, repository.ErrNotFound
+	}
+	existing.Name = strings.TrimSpace(input.Name)
+	existing.Kind = models.NormalizeWalletKind(input.Kind)
+	existing.MemberID = input.MemberID
+	existing.Balance = input.Balance
+	m.wallets[id] = existing
+	return existing, nil
+}
+
+func (m *memoryStore) DeleteWallet(_ context.Context, id int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.wallets[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(m.wallets, id)
+	return nil
+}
+
+type stubCDI struct {
+	rate float64
+}
+
+func (s stubCDI) AnnualRate(_ context.Context) (float64, error) {
+	return s.rate, nil
 }
 
 func TestHealth(t *testing.T) {
@@ -373,6 +672,54 @@ func TestCreateTransactionSuccess(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateTransactionDebitsWallet(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Food", Icon: "food"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana", MonthlySalary: 3000})
+	wallet, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name:     "Conta",
+		Kind:     models.WalletChecking,
+		MemberID: &member.ID,
+		Balance:  500,
+	})
+	h := &handlers.Transactions{Store: store, Categories: store, Members: store}
+
+	req := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(fmt.Sprintf(
+		`{"category_id":1,"member_id":%d,"wallet_id":%d,"type":"expense","description":"Mercado","amount":80,"date":"2026-08-15"}`,
+		member.ID, wallet.ID,
+	)))
+	rec := httptest.NewRecorder()
+	h.ListOrCreate(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	updated, err := store.GetWalletByID(context.Background(), wallet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Balance != 420 {
+		t.Fatalf("wallet after expense = %v, want 420", updated.Balance)
+	}
+
+	incomeReq := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(fmt.Sprintf(
+		`{"category_id":1,"member_id":%d,"wallet_id":%d,"type":"income","description":"Salário recebido","amount":3000,"date":"2026-08-05"}`,
+		member.ID, wallet.ID,
+	)))
+	incomeRec := httptest.NewRecorder()
+	h.ListOrCreate(incomeRec, incomeReq)
+	if incomeRec.Code != http.StatusCreated {
+		t.Fatalf("income status = %d body=%s", incomeRec.Code, incomeRec.Body.String())
+	}
+	credited, err := store.GetWalletByID(context.Background(), wallet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credited.Balance != 3420 {
+		t.Fatalf("wallet after income = %v, want 3420", credited.Balance)
 	}
 }
 
@@ -536,6 +883,14 @@ func TestCreateOngoingAndUntilBills(t *testing.T) {
 func TestBillPaidChecklist(t *testing.T) {
 	store := newMemoryStore()
 	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Nicolas", MonthlySalary: 6500})
+	memberID := member.ID
+	wallet, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name:     "Conta",
+		Kind:     models.WalletChecking,
+		MemberID: &memberID,
+		Balance:  1000,
+	})
 	h := &handlers.Bills{Store: store, Categories: store, Members: store}
 
 	createReq := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(
@@ -552,13 +907,21 @@ func TestBillPaidChecklist(t *testing.T) {
 	}
 
 	paidReq := httptest.NewRequest(http.MethodPut, "/bills/1/paid", strings.NewReader(
-		`{"year":2026,"month":8,"paid":true}`,
+		`{"year":2026,"month":8,"paid":true,"paid_by_member_id":1}`,
 	))
 	paidReq.SetPathValue("id", "1")
 	paidRec := httptest.NewRecorder()
 	h.SetPaid(paidRec, paidReq)
 	if paidRec.Code != http.StatusOK {
 		t.Fatalf("paid status = %d body=%s", paidRec.Code, paidRec.Body.String())
+	}
+
+	updatedWallet, err := store.GetWalletByID(context.Background(), wallet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedWallet.Balance != 820 {
+		t.Fatalf("wallet after pay = %v, want 820", updatedWallet.Balance)
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/bills/payments?year=2026&month=8", nil)
@@ -574,6 +937,9 @@ func TestBillPaidChecklist(t *testing.T) {
 	if len(payments) != 1 || payments[0].BillID != bill.ID {
 		t.Fatalf("payments = %+v, want one for bill %d", payments, bill.ID)
 	}
+	if payments[0].PaidByMemberID == nil || *payments[0].PaidByMemberID != memberID {
+		t.Fatalf("paid_by = %+v", payments[0].PaidByMemberID)
+	}
 
 	unpaidReq := httptest.NewRequest(http.MethodPut, "/bills/1/paid", strings.NewReader(
 		`{"year":2026,"month":8,"paid":false}`,
@@ -583,6 +949,14 @@ func TestBillPaidChecklist(t *testing.T) {
 	h.SetPaid(unpaidRec, unpaidReq)
 	if unpaidRec.Code != http.StatusNoContent {
 		t.Fatalf("unpaid status = %d body=%s", unpaidRec.Code, unpaidRec.Body.String())
+	}
+
+	refunded, err := store.GetWalletByID(context.Background(), wallet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refunded.Balance != 1000 {
+		t.Fatalf("wallet after unpay = %v, want 1000", refunded.Balance)
 	}
 
 	emptyReq := httptest.NewRequest(http.MethodGet, "/bills/payments?year=2026&month=8", nil)
@@ -597,12 +971,189 @@ func TestBillPaidChecklist(t *testing.T) {
 	}
 
 	missingReq := httptest.NewRequest(http.MethodPut, "/bills/99/paid", strings.NewReader(
-		`{"year":2026,"month":8,"paid":true}`,
+		`{"year":2026,"month":8,"paid":true,"paid_by_member_id":1}`,
 	))
 	missingReq.SetPathValue("id", "99")
 	missingRec := httptest.NewRecorder()
 	h.SetPaid(missingRec, missingReq)
 	if missingRec.Code != http.StatusNotFound {
 		t.Fatalf("missing bill status = %d, want 404", missingRec.Code)
+	}
+}
+
+func TestSavingsGoalsAndForecast(t *testing.T) {
+	store := newMemoryStore()
+	members := &handlers.Members{Store: store}
+	savings := &handlers.Savings{Store: store, Members: store, CDI: stubCDI{rate: 14.15}}
+	forecast := &handlers.Forecast{Store: store}
+
+	createMember := httptest.NewRequest(http.MethodPost, "/members", strings.NewReader(
+		`{"name":"Nicolas","monthly_salary":5000}`,
+	))
+	createMemberRec := httptest.NewRecorder()
+	members.ListOrCreate(createMemberRec, createMember)
+	if createMemberRec.Code != http.StatusCreated {
+		t.Fatalf("create member status = %d", createMemberRec.Code)
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/savings", strings.NewReader(
+		`{"name":"Viagem","end_kind":"amount","target_amount":8000,"member_ids":[1]}`,
+	))
+	createRec := httptest.NewRecorder()
+	savings.ListOrCreate(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create goal status = %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var goal models.SavingsGoal
+	if err := json.NewDecoder(createRec.Body).Decode(&goal); err != nil {
+		t.Fatal(err)
+	}
+	wantPlan := models.BuildSavingsPlan(8000, 0, 14.15, 12, 1, true)
+	if goal.MonthlyAmount != wantPlan.MonthlyAmount || goal.TargetAmount != 8000 {
+		t.Fatalf("goal = %+v, want monthly %v", goal, wantPlan.MonthlyAmount)
+	}
+	if goal.EndKind != models.SavingsEndAmount {
+		t.Fatalf("end_kind = %q", goal.EndKind)
+	}
+
+	missingName := httptest.NewRequest(http.MethodPost, "/savings", strings.NewReader(
+		`{"name":"","end_kind":"amount","target_amount":1000,"member_ids":[1]}`,
+	))
+	missingRec := httptest.NewRecorder()
+	savings.ListOrCreate(missingRec, missingName)
+	if missingRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing name status = %d, want 400", missingRec.Code)
+	}
+
+	noPeople := httptest.NewRequest(http.MethodPost, "/savings", strings.NewReader(
+		`{"name":"Reserva","end_kind":"amount","target_amount":1000,"member_ids":[]}`,
+	))
+	noPeopleRec := httptest.NewRecorder()
+	savings.ListOrCreate(noPeopleRec, noPeople)
+	if noPeopleRec.Code != http.StatusBadRequest {
+		t.Fatalf("no people status = %d, want 400", noPeopleRec.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/forecast/monthly?year=2026&month=8", nil)
+	rec := httptest.NewRecorder()
+	forecast.Monthly(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forecast status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body models.MonthlyForecast
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PlannedSavings != wantPlan.MonthlyAmount {
+		t.Fatalf("planned_savings = %v, want %v", body.PlannedSavings, wantPlan.MonthlyAmount)
+	}
+	wantRemaining := 5000 - wantPlan.MonthlyAmount
+	if body.Remaining != wantRemaining {
+		t.Fatalf("remaining = %v, want %v", body.Remaining, wantRemaining)
+	}
+	if len(body.ByMember) != 1 || body.ByMember[0].SavingsShare != wantPlan.MonthlyAmount {
+		t.Fatalf("by_member = %+v", body.ByMember)
+	}
+
+	planReq := httptest.NewRequest(http.MethodGet, "/savings/plan?end_kind=amount&target=8000&members=1", nil)
+	planRec := httptest.NewRecorder()
+	savings.Plan(planRec, planReq)
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("plan status = %d body=%s", planRec.Code, planRec.Body.String())
+	}
+
+	saveReq := httptest.NewRequest(http.MethodPut, "/savings/1/month", strings.NewReader(
+		`{"year":2026,"month":8,"amount":500}`,
+	))
+	saveReq.SetPathValue("id", "1")
+	saveRec := httptest.NewRecorder()
+	savings.SetMonthAmount(saveRec, saveReq)
+	if saveRec.Code != http.StatusOK {
+		t.Fatalf("save month status = %d body=%s", saveRec.Code, saveRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/savings/months?year=2026&month=8", nil)
+	listRec := httptest.NewRecorder()
+	savings.ListMonthAmounts(listRec, listReq)
+	var months []models.SavingsMonthAmount
+	if err := json.NewDecoder(listRec.Body).Decode(&months); err != nil {
+		t.Fatal(err)
+	}
+	if len(months) != 1 || months[0].Amount != 500 {
+		t.Fatalf("months = %+v", months)
+	}
+
+	goalsReq := httptest.NewRequest(http.MethodGet, "/savings", nil)
+	goalsRec := httptest.NewRecorder()
+	savings.ListOrCreate(goalsRec, goalsReq)
+	var goals []models.SavingsGoal
+	if err := json.NewDecoder(goalsRec.Body).Decode(&goals); err != nil {
+		t.Fatal(err)
+	}
+	if len(goals) != 1 || goals[0].SavedAmount != 500 {
+		t.Fatalf("goals = %+v", goals)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/savings/1/month", strings.NewReader(
+		`{"year":2026,"month":8,"amount":0}`,
+	))
+	clearReq.SetPathValue("id", "1")
+	clearRec := httptest.NewRecorder()
+	savings.SetMonthAmount(clearRec, clearReq)
+	if clearRec.Code != http.StatusNoContent {
+		t.Fatalf("clear month status = %d body=%s", clearRec.Code, clearRec.Body.String())
+	}
+}
+
+func TestWalletsCreateAndUpdate(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Nicolas", MonthlySalary: 6500})
+	h := &handlers.Wallets{Store: store, Members: store}
+
+	memberID := 1
+	createReq := httptest.NewRequest(http.MethodPost, "/wallets", strings.NewReader(
+		`{"name":"Conta","kind":"checking","member_id":1,"balance":1186.72}`,
+	))
+	createRec := httptest.NewRecorder()
+	h.ListOrCreate(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var wallet models.Wallet
+	if err := json.NewDecoder(createRec.Body).Decode(&wallet); err != nil {
+		t.Fatal(err)
+	}
+	if wallet.Balance != 1186.72 || wallet.MemberID == nil || *wallet.MemberID != memberID {
+		t.Fatalf("wallet = %+v", wallet)
+	}
+
+	jointReq := httptest.NewRequest(http.MethodPost, "/wallets", strings.NewReader(
+		`{"name":"Caixinha conjunta","kind":"savings","member_id":null,"balance":1603.6}`,
+	))
+	jointRec := httptest.NewRecorder()
+	h.ListOrCreate(jointRec, jointReq)
+	if jointRec.Code != http.StatusCreated {
+		t.Fatalf("joint status = %d body=%s", jointRec.Code, jointRec.Body.String())
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/wallets/1", strings.NewReader(
+		`{"name":"Conta","kind":"checking","member_id":1,"balance":2000}`,
+	))
+	updateReq.SetPathValue("id", "1")
+	updateRec := httptest.NewRecorder()
+	h.Update(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update status = %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/wallets", nil)
+	listRec := httptest.NewRecorder()
+	h.ListOrCreate(listRec, listReq)
+	var items []models.Wallet
+	if err := json.NewDecoder(listRec.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("wallets len = %d, want 2", len(items))
 	}
 }

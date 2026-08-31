@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/NicolasKonishi/FinancialControl/internal/analysis"
+	"github.com/NicolasKonishi/FinancialControl/internal/cdi"
 	"github.com/NicolasKonishi/FinancialControl/internal/config"
 	"github.com/NicolasKonishi/FinancialControl/internal/database"
 	"github.com/NicolasKonishi/FinancialControl/internal/repository"
@@ -32,6 +33,7 @@ func main() {
 	handler := server.New(server.Dependencies{
 		Store:          repository.NewStore(db),
 		AnalysisClient: analysis.NewClient(cfg.PythonAnalysisURL),
+		CDI:            cdi.NewClient(),
 	})
 
 	httpServer := &http.Server{
@@ -71,6 +73,7 @@ func printStartupURLs(cfg config.Config) {
 	fmt.Printf("  Monthly forecast:    %s/forecast/monthly\n", apiURL)
 	fmt.Printf("  Family members:      %s/members\n", apiURL)
 	fmt.Printf("  Monthly bills:       %s/bills\n", apiURL)
+	fmt.Printf("  Savings goals:       %s/savings\n", apiURL)
 	fmt.Printf("  Python analysis:     %s\n", cfg.PythonAnalysisURL)
 	fmt.Printf("  SQLite file:         %s\n", cfg.SQLitePath)
 	fmt.Println()

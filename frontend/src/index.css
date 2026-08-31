@@ -564,6 +564,26 @@ button {
   margin-bottom: 0;
 }
 
+.saldo-card {
+  grid-column: 1 / -1;
+}
+
+.forecast-value {
+  font-family: var(--display);
+  font-size: clamp(1.25rem, 4.5vw, 1.7rem);
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+.forecast-value.neg {
+  color: var(--expense);
+}
+
+.forecast-value.pos {
+  color: var(--income);
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -711,7 +731,7 @@ button.row {
 
 .actions {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
   margin-bottom: 0.85rem;
 }
@@ -920,6 +940,172 @@ button.row {
   gap: 0.35rem;
   align-items: center;
   justify-content: flex-end;
+}
+
+button.row.settings-item {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+button.row.settings-item:hover {
+  background: var(--soft-strong);
+}
+
+.settings-chevron {
+  color: var(--muted);
+  font-size: 1.35rem;
+  line-height: 1;
+  padding-right: 0.15rem;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.goal-card {
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 0.65rem;
+}
+
+.goal-card-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.goal-card-head h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.goal-card-head p {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.goal-save {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.goal-save .primary {
+  width: auto;
+  min-width: 6.5rem;
+}
+
+.goal-plan {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.goal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 0.85rem;
+}
+
+.piggy {
+  border: 1px solid var(--line);
+  background: var(--soft);
+  border-radius: 16px;
+  padding: 0.9rem 0.8rem 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 0.35rem;
+  color: inherit;
+}
+
+.piggy h3 {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.piggy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.piggy-value {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-weight: 560;
+  color: var(--ink) !important;
+}
+
+.piggy .progress {
+  margin-top: 0.25rem;
+}
+
+.goal-move-actions {
+  display: flex;
+  gap: 0.45rem;
+  align-items: end;
+}
+
+.goal-move-actions .primary,
+.goal-move-actions .ghost {
+  width: auto;
+  min-width: 6.2rem;
+}
+
+.bill-manage-row {
+  align-items: center;
+}
+
+.check-pay {
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 6px;
+  border: 1.5px solid var(--line);
+  background: var(--input-bg);
+  padding: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--on-accent);
+}
+
+.check-pay.on {
+  background: var(--income);
+  border-color: var(--income);
+}
+
+.check-pay svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.bill-manage-row.overdue .check-pay {
+  border-color: var(--danger);
 }
 
 .row-actions button,
@@ -1155,6 +1341,11 @@ select {
   min-width: 3.55rem;
 }
 
+.bottom-nav .nav-glyph {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
 .icon-picker {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -1269,7 +1460,6 @@ select {
     align-self: start;
     grid-column: 1;
     grid-row: 1;
-    width: auto;
     height: 100dvh;
     display: flex;
     flex-direction: column;
@@ -1292,6 +1482,12 @@ select {
     padding: 0.72rem 0.9rem;
     border-radius: 12px;
     text-align: left;
+  }
+
+  .bottom-nav .nav-glyph {
+    width: 1.15rem;
+    height: 1.15rem;
+    flex-shrink: 0;
   }
 
   .bottom-nav button.active {
@@ -1376,6 +1572,10 @@ select {
     height: 100%;
   }
 
+  .home-dash:has(> :nth-child(2)) > .saldo-card {
+    height: auto;
+  }
+
   .metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -1400,5 +1600,9 @@ select {
 
   .home-dash .card > .list {
     grid-template-columns: 1fr;
+  }
+
+  .home-dash .saldo-card > .list {
+    grid-template-columns: 1fr 1fr;
   }
 }
