@@ -10,6 +10,7 @@ import {
   iconLabel,
   LedgerNavIcon,
   PencilIcon,
+  QuickActionIcon,
   SavingsNavIcon,
   SettingsNavIcon,
   StatsNavIcon,
@@ -1671,7 +1672,8 @@ export default function App() {
                 title="Novo gasto"
                 onClick={() => openSheet('expense')}
               >
-                <CategoryGlyph icon="shopping" />
+                <QuickActionIcon action="expense" />
+                <span>Novo gasto</span>
               </button>
               <button
                 type="button"
@@ -1680,7 +1682,8 @@ export default function App() {
                 title="Freelancer"
                 onClick={() => openSheet('freelance')}
               >
-                <CategoryGlyph icon="freelance" />
+                <QuickActionIcon action="freelance" />
+                <span>Freelancer</span>
               </button>
               <button
                 type="button"
@@ -1689,7 +1692,8 @@ export default function App() {
                 title="Nova conta"
                 onClick={() => openSheet('bill')}
               >
-                <BillsNavIcon />
+                <QuickActionIcon action="bill" />
+                <span>Nova conta</span>
               </button>
             </div>
           )}

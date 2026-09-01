@@ -13,17 +13,19 @@ import (
 
 // CreateBill inserts a monthly bill and its paying members.
 func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return models.Bill{}, fmt.Errorf("begin create bill: %w", err)
-	}
-	defer tx.Rollback()
-
+	// Validate before BeginTx: the pool is MaxOpenConns(1), so querying s.db
+	// while a transaction holds the only connection would deadlock.
 	if bill.WalletID != nil {
 		if _, err := s.GetWalletByID(ctx, *bill.WalletID); err != nil {
 			return models.Bill{}, err
 		}
 	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Bill{}, fmt.Errorf("begin create bill: %w", err)
+	}
+	defer tx.Rollback()
 
 	const query = `
 		INSERT INTO bills (
@@ -182,17 +184,19 @@ func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 
 // UpdateBill replaces an existing bill and its paying members.
 func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (models.Bill, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return models.Bill{}, fmt.Errorf("begin update bill: %w", err)
-	}
-	defer tx.Rollback()
-
+	// Validate before BeginTx: the pool is MaxOpenConns(1), so querying s.db
+	// while a transaction holds the only connection would deadlock.
 	if bill.WalletID != nil {
 		if _, err := s.GetWalletByID(ctx, *bill.WalletID); err != nil {
 			return models.Bill{}, err
 		}
 	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Bill{}, fmt.Errorf("begin update bill: %w", err)
+	}
+	defer tx.Rollback()
 
 	const query = `
 		UPDATE bills

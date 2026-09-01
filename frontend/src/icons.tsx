@@ -337,6 +337,45 @@ export function BillsNavIcon() {
   )
 }
 
+export function QuickActionIcon({ action }: { action: 'expense' | 'freelance' | 'bill' }) {
+  const props = {
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    className: 'quick-action-glyph',
+    'aria-hidden': true,
+  }
+
+  if (action === 'expense') {
+    return (
+      <svg {...props}>
+        <rect x="4" y="3.5" width="16" height="17" rx="2" />
+        <path d="M8 8h8M8 12h5M8 16h3" />
+        <path d="M17 15v4M15 17h4" />
+      </svg>
+    )
+  }
+
+  if (action === 'freelance') {
+    return (
+      <svg {...props}>
+        <path d="M4 8.5h16v11H4z" />
+        <path d="M9 8.5V6h6v2.5M4 13h16M10 13v1.5h4V13" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M8 2.5v3M16 2.5v3M4 9h16M8 13h2M14 13h2M8 16h2" />
+    </svg>
+  )
+}
+
 export function StatsNavIcon() {
   return (
     <svg {...navIconProps}>

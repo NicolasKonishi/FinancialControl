@@ -584,8 +584,8 @@ button {
 .home-quick {
   display: flex;
   flex-shrink: 0;
-  gap: 0.35rem;
-  padding: 0.3rem;
+  gap: 0.4rem;
+  padding: 0.4rem;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -593,20 +593,57 @@ button {
 }
 
 .home-quick-btn {
-  width: 2.35rem;
-  height: 2.35rem;
-  padding: 0;
-  border: none;
-  border-radius: 10px;
+  min-width: 6.5rem;
+  min-height: 3.2rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 11px;
   background: var(--soft);
   color: var(--ink);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .home-quick-btn:hover {
   background: var(--soft-strong);
+  border-color: var(--line);
+}
+
+.home-quick-btn:focus-visible {
+  outline: 2px solid var(--income);
+  outline-offset: 2px;
+}
+
+.quick-action-glyph {
+  width: 1.2rem;
+  height: 1.2rem;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  .top-filter-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .top-filter-row .filter-bar {
+    flex-basis: 100%;
+  }
+
+  .home-quick {
+    width: 100%;
+  }
+
+  .home-quick-btn {
+    min-width: 0;
+    flex: 1;
+  }
 }
 
 .account-group {
