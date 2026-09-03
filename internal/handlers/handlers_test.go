@@ -957,6 +957,42 @@ func TestCreateOngoingAndUntilBills(t *testing.T) {
 	}
 }
 
+func TestCardCategoryBillAutomaticallyUsesCreditCard(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Cartão", Icon: "shopping"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	checking, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name:     "Conta comum",
+		Kind:     models.WalletChecking,
+		MemberID: &member.ID,
+	})
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name:       "Nubank",
+		Kind:       models.WalletCredit,
+		MemberID:   &member.ID,
+		ClosingDay: &closing,
+		DueDay:     &due,
+	})
+	h := &handlers.Bills{Store: store, Categories: store, Members: store, Wallets: store}
+	req := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(fmt.Sprintf(
+		`{"name":"Assinatura","amount":29,"category_id":%d,"wallet_id":%d,"due_day":10,"frequency":"monthly","recurrence":"ongoing","start_month":"2026-09","member_ids":[%d]}`,
+		category.ID, checking.ID, member.ID,
+	)))
+	rec := httptest.NewRecorder()
+	h.ListOrCreate(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var bill models.Bill
+	if err := json.NewDecoder(rec.Body).Decode(&bill); err != nil {
+		t.Fatal(err)
+	}
+	if bill.WalletID == nil || *bill.WalletID != card.ID {
+		t.Fatalf("wallet_id = %v, want %d", bill.WalletID, card.ID)
+	}
+}
+
 func TestBillPaidChecklist(t *testing.T) {
 	store := newMemoryStore()
 	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})

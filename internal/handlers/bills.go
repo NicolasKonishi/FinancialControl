@@ -212,12 +212,13 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 	}
 
 	walletID := input.WalletID
-	if walletID == nil && isCardCategory(category.Name) && h.Wallets != nil {
+	if isCardCategory(category.Name) && h.Wallets != nil {
 		wallets, err := h.Wallets.ListWallets(r.Context())
 		if err != nil {
 			writeStoreError(w, err, "wallet not found")
 			return models.Bill{}, false
 		}
+		var cardWalletID *int
 		for _, wallet := range wallets {
 			if !models.IsCredit(wallet.Kind) {
 				continue
@@ -226,8 +227,13 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 				continue
 			}
 			id := wallet.ID
-			walletID = &id
-			break
+			cardWalletID = &id
+			if strings.Contains(strings.ToLower(wallet.Name), "nubank") {
+				break
+			}
+		}
+		if cardWalletID != nil {
+			walletID = cardWalletID
 		}
 	}
 

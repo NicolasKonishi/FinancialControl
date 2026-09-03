@@ -178,6 +178,23 @@ func TestCreditCardExpenseRaisesInvoiceAndPayInvoiceDebitsChecking(t *testing.T)
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (wallet_id, year, month)
 		);
+		CREATE TABLE bills (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			amount REAL NOT NULL,
+			amount_mode TEXT NOT NULL DEFAULT 'fixed',
+			interest_rate REAL NOT NULL DEFAULT 0,
+			category_id INTEGER NOT NULL,
+			member_id INTEGER,
+			due_day INTEGER NOT NULL,
+			frequency TEXT NOT NULL DEFAULT 'monthly',
+			recurrence TEXT NOT NULL,
+			start_month TEXT NOT NULL,
+			end_month TEXT,
+			notes TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			wallet_id INTEGER
+		);
 	`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		t.Fatalf("schema: %v", err)

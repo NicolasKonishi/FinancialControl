@@ -29,7 +29,7 @@ Fluxo típico:
 
 1. A família cadastra pessoas e salários mensais.
 2. Lança gastos (mercado, comida, transporte…) e extras (freelancer).
-   Também pode mandar o **PDF da fatura do cartão** para o app marcar o que faltou.
+   Também pode importar extratos em **PDF, CSV ou OFX**, tanto de conta quanto de cartão.
 3. O app mostra o que entrou, o que saiu e quanto ainda dá para gastar no mês.
 
 ---
@@ -79,9 +79,18 @@ Fluxo típico:
 | Área | O que faz |
 |------|-----------|
 | **Família** | Cadastro de pessoas + salário mensal de cada uma (editar/excluir). |
-| **Gastos** | Tabela do mês: entradas e saídas, com categoria e ícone. Importa extrato em PDF do cartão e lança o que ainda não estava marcado. |
+| **Gastos** | Tabela do mês: entradas e saídas, com categoria e ícone. Importa extratos em PDF, CSV ou OFX e evita lançamentos duplicados. |
 | **Início** | Previsão do mês, atalhos de Saída / Entrada / Extra (freelancer). |
 | **Categorias** | Vêm pré-carregadas (Comida, Mercado, Transporte, Casa, Saúde, Lazer, Salário, Freelancer), cada uma com ícone. |
+
+### Fatura do cartão Nubank
+
+- O cartão fecha no dia **14** e vence no dia **21**.
+- Uma compra feita antes do fechamento entra na fatura daquele ciclo; uma compra feita no dia 14 ou depois entra na fatura seguinte.
+- Contas da categoria **Cartão** são vinculadas automaticamente ao cartão Nubank. Contas escolhidas manualmente como pertencentes ao Nubank seguem a mesma regra.
+- A fatura mensal soma os lançamentos manuais e as contas recorrentes ligadas ao cartão.
+- Ao importar uma fatura OFX, o saldo informado pelo banco passa a ser o valor oficial daquela fatura.
+- Ao quitar a fatura, todas as contas que fazem parte dela são marcadas automaticamente como pagas, sem descontar cada componente novamente da conta corrente.
 
 A previsão responde, em resumo:
 
@@ -231,6 +240,7 @@ DELETE /transactions/{id}
 
 GET    /forecast/monthly?year=2026&month=8
 GET    /analysis/monthly?year=2026&month=8
+GET    /card-invoices?year=2026&month=9
 
 POST   /statements/preview   (multipart: file, wallet_id, member_id, year, month)
 POST   /statements/import

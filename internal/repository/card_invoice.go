@@ -48,6 +48,16 @@ func (s *Store) ListCardInvoices(ctx context.Context, year, month int) ([]models
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate card invoices: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close card invoices: %w", err)
+	}
+	for i := range items {
+		invoice, err := s.withPlannedCardBills(ctx, items[i])
+		if err != nil {
+			return nil, err
+		}
+		items[i] = invoice
+	}
 	return items, nil
 }
 
@@ -77,7 +87,7 @@ func (s *Store) GetCardInvoice(ctx context.Context, walletID, year, month int) (
 	if err != nil {
 		return models.CardInvoice{}, err
 	}
-	return invoice, nil
+	return s.withPlannedCardBills(ctx, invoice)
 }
 
 // ReconcileCardInvoice records the authoritative total reported by a statement.
@@ -165,11 +175,23 @@ func (s *Store) PayCardInvoice(ctx context.Context, creditWalletID int, input mo
 	}
 	now := formatDateTime(time.Now())
 	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO card_invoices (wallet_id, year, month, amount, paid_amount, source, updated_at)
+		VALUES (?, ?, ?, 0, 0, 'calculated', ?)
+		ON CONFLICT (wallet_id, year, month) DO NOTHING
+	`, creditWalletID, input.Year, input.Month, now); err != nil {
+		return models.CardInvoice{}, fmt.Errorf("ensure card invoice payment row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE card_invoices
-		SET paid_amount = MIN(amount, paid_amount + ?), updated_at = ?
+		SET paid_amount = paid_amount + ?, updated_at = ?
 		WHERE wallet_id = ? AND year = ? AND month = ?
 	`, amount, now, creditWalletID, input.Year, input.Month); err != nil {
 		return models.CardInvoice{}, fmt.Errorf("pay card invoice: %w", err)
+	}
+	if amount >= invoice.Outstanding {
+		if err := s.markCardBillsPaidTx(ctx, tx, creditWalletID, input.Year, input.Month, now); err != nil {
+			return models.CardInvoice{}, err
+		}
 	}
 	if err := syncWalletInvoiceBalanceTx(ctx, tx, creditWalletID); err != nil {
 		return models.CardInvoice{}, err
@@ -178,6 +200,113 @@ func (s *Store) PayCardInvoice(ctx context.Context, creditWalletID int, input mo
 		return models.CardInvoice{}, fmt.Errorf("commit pay card invoice: %w", err)
 	}
 	return s.GetCardInvoice(ctx, creditWalletID, input.Year, input.Month)
+}
+
+func (s *Store) withPlannedCardBills(ctx context.Context, invoice models.CardInvoice) (models.CardInvoice, error) {
+	if invoice.Source == "statement" {
+		return models.FinalizeCardInvoice(invoice), nil
+	}
+	bills, err := s.ListBills(ctx)
+	if err != nil {
+		return models.CardInvoice{}, err
+	}
+	for _, bill := range bills {
+		if bill.WalletID == nil || *bill.WalletID != invoice.WalletID {
+			continue
+		}
+		invoice.Amount += bill.ChargeForMonth(invoice.Year, invoice.Month)
+	}
+	return models.FinalizeCardInvoice(invoice), nil
+}
+
+func (s *Store) markCardBillsPaidTx(ctx context.Context, tx *sql.Tx, walletID, year, month int, paidAt string) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT b.id, b.member_id
+		FROM bills b
+		WHERE b.wallet_id = ?
+	`, walletID)
+	if err != nil {
+		return fmt.Errorf("list card bill components: %w", err)
+	}
+	type component struct {
+		id       int
+		memberID sql.NullInt64
+	}
+	components := make([]component, 0)
+	for rows.Next() {
+		var item component
+		if err := rows.Scan(&item.id, &item.memberID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan card bill component: %w", err)
+		}
+		components = append(components, item)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close card bill components: %w", err)
+	}
+
+	var ownerID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT member_id FROM wallets WHERE id = ?`, walletID).Scan(&ownerID); err != nil {
+		return fmt.Errorf("get card owner: %w", err)
+	}
+	for _, item := range components {
+		bill, err := getBillByIDTx(ctx, tx, item.id)
+		if err != nil {
+			return err
+		}
+		if !bill.IsActiveInMonth(year, month) {
+			continue
+		}
+		payer := ownerID
+		if !payer.Valid && item.memberID.Valid {
+			payer = item.memberID
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO bill_payments (bill_id, year, month, paid_at, paid_by_member_id, wallet_id, amount)
+			VALUES (?, ?, ?, ?, ?, ?, 0)
+			ON CONFLICT (bill_id, year, month) DO UPDATE SET
+				paid_at = excluded.paid_at,
+				paid_by_member_id = excluded.paid_by_member_id,
+				wallet_id = excluded.wallet_id,
+				amount = 0
+		`, item.id, year, month, paidAt, nullableInt64(payer), walletID); err != nil {
+			return fmt.Errorf("mark card bill component paid: %w", err)
+		}
+	}
+	return nil
+}
+
+func getBillByIDTx(ctx context.Context, tx *sql.Tx, id int) (models.Bill, error) {
+	var (
+		bill     models.Bill
+		endMonth sql.NullString
+		walletID sql.NullInt64
+		created  string
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
+			recurrence, start_month, end_month, notes, created_at, wallet_id
+		FROM bills WHERE id = ?
+	`, id).Scan(
+		&bill.ID, &bill.Name, &bill.Amount, &bill.AmountMode, &bill.InterestRate,
+		&bill.CategoryID, &bill.DueDay, &bill.Frequency, &bill.Recurrence,
+		&bill.StartMonth, &endMonth, &bill.Notes, &created, &walletID,
+	); err != nil {
+		return models.Bill{}, fmt.Errorf("get card bill component: %w", err)
+	}
+	if endMonth.Valid {
+		value := endMonth.String
+		bill.EndMonth = &value
+	}
+	bill.WalletID = fromNullInt(walletID)
+	return bill, nil
+}
+
+func nullableInt64(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
 }
 
 func adjustCardInvoiceTx(ctx context.Context, tx *sql.Tx, wallet models.Wallet, at time.Time, delta float64) error {

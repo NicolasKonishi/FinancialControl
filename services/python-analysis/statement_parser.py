@@ -1,9 +1,3 @@
-"""Parse Brazilian credit-card / bank statement PDFs (and simple CSV).
-
-Go owns persistence. This module only turns a file into dated line items
-plus a suggested category icon.
-"""
-
 from __future__ import annotations
 
 import csv

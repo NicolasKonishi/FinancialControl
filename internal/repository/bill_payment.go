@@ -100,7 +100,12 @@ func (s *Store) SetBillPaid(ctx context.Context, billID, year, month int, paid b
 	amount = math.Round(amount*100) / 100
 
 	chargeDate := billChargeDate(bill, year, month)
-	if err := adjustWalletAtDateTx(ctx, tx, wallet.ID, -amount, &chargeDate); err != nil {
+	storedAmount := amount
+	if models.IsCredit(wallet.Kind) {
+		// Card-linked bills are already part of the planned invoice total.
+		// Checking one off confirms the component; it must not duplicate it.
+		storedAmount = 0
+	} else if err := adjustWalletAtDateTx(ctx, tx, wallet.ID, -amount, &chargeDate); err != nil {
 		return err
 	}
 
@@ -122,7 +127,7 @@ func (s *Store) SetBillPaid(ctx context.Context, billID, year, month int, paid b
 		now,
 		*paidByMemberID,
 		wallet.ID,
-		amount,
+		storedAmount,
 	); err != nil {
 		return fmt.Errorf("set bill payment: %w", err)
 	}

@@ -6,7 +6,7 @@ Small FastAPI service used by the Go backend for monthly statistics.
 
 ```bash
 cd services/python-analysis
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
