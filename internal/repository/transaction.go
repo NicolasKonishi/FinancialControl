@@ -202,12 +202,12 @@ func (s *Store) validateTxWallet(ctx context.Context, memberID, walletID *int) e
 
 func applyTransactionWallet(ctx context.Context, tx *sql.Tx, previous, next *models.Transaction) error {
 	if previous != nil && previous.WalletID != nil {
-		if err := adjustWalletTx(ctx, tx, *previous.WalletID, -transactionWalletDelta(*previous)); err != nil {
+		if err := adjustWalletAtDateTx(ctx, tx, *previous.WalletID, -transactionWalletDelta(*previous), &previous.Date); err != nil {
 			return err
 		}
 	}
 	if next != nil && next.WalletID != nil {
-		if err := adjustWalletTx(ctx, tx, *next.WalletID, transactionWalletDelta(*next)); err != nil {
+		if err := adjustWalletAtDateTx(ctx, tx, *next.WalletID, transactionWalletDelta(*next), &next.Date); err != nil {
 			return err
 		}
 	}

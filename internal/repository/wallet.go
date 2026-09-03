@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -137,50 +136,13 @@ func (s *Store) DeleteWallet(ctx context.Context, id int) error {
 
 // PayWalletInvoice reduces a credit-card invoice by debiting another account.
 func (s *Store) PayWalletInvoice(ctx context.Context, creditWalletID int, input models.PayInvoiceInput) (models.Wallet, error) {
-	amount := math.Round(input.Amount*100) / 100
-	if !(amount > 0) {
-		return models.Wallet{}, ErrInvalidAmount
+	if input.Year < 2000 || input.Month < 1 || input.Month > 12 {
+		now := time.Now()
+		input.Year = now.Year()
+		input.Month = int(now.Month())
 	}
-	if input.FromWalletID < 1 || input.FromWalletID == creditWalletID {
-		return models.Wallet{}, ErrInvalidAmount
-	}
-
-	credit, err := s.GetWalletByID(ctx, creditWalletID)
-	if err != nil {
+	if _, err := s.PayCardInvoice(ctx, creditWalletID, input); err != nil {
 		return models.Wallet{}, err
-	}
-	if !models.IsCredit(credit.Kind) {
-		return models.Wallet{}, ErrNotCredit
-	}
-	if credit.InvoiceBalance <= 0 {
-		return models.Wallet{}, ErrInvoiceEmpty
-	}
-	if amount > credit.InvoiceBalance {
-		amount = credit.InvoiceBalance
-	}
-
-	from, err := s.GetWalletByID(ctx, input.FromWalletID)
-	if err != nil {
-		return models.Wallet{}, err
-	}
-	if models.IsCredit(from.Kind) {
-		return models.Wallet{}, ErrNotCredit
-	}
-
-	dbTx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return models.Wallet{}, fmt.Errorf("begin pay invoice: %w", err)
-	}
-	defer dbTx.Rollback()
-
-	if err := adjustWalletTx(ctx, dbTx, from.ID, -amount); err != nil {
-		return models.Wallet{}, err
-	}
-	if err := adjustWalletTx(ctx, dbTx, credit.ID, amount); err != nil {
-		return models.Wallet{}, err
-	}
-	if err := dbTx.Commit(); err != nil {
-		return models.Wallet{}, fmt.Errorf("commit pay invoice: %w", err)
 	}
 	return s.GetWalletByID(ctx, creditWalletID)
 }

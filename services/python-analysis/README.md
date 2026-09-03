@@ -18,4 +18,8 @@ uvicorn main:app --reload --port 8000
 
 Go sends transactions + categories for a month. Python returns totals and expense breakdown by category.
 
+`POST /statements/parse?year=2026&month=8`
+
+Go sends a credit-card PDF (or CSV) as the raw body. Python extracts purchases and suggests a category icon. Persistence stays in Go.
+
 This service does **not** own persistence. Go remains the source of truth.

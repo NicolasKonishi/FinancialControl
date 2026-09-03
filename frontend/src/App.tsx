@@ -49,12 +49,14 @@ import {
   setQuickLaunchUrl,
 } from './quickAdd'
 import { QuickLaunch } from './QuickLaunch'
+import { StatementImport } from './StatementImport'
 import type {
   Bill,
   BillAmountMode,
   BillFrequency,
   BillPayment,
   BillRecurrence,
+  CardInvoice,
   Category,
   CategoryIcon,
   Member,
@@ -69,7 +71,7 @@ import type {
 import './index.css'
 
 type View = 'home' | 'ledger' | 'bills' | 'savings' | 'family' | 'categories' | 'statistics' | 'settings' | 'accounts'
-type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | null
+type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | 'import-statement' | null
 type WalletOwner = number | 'joint'
 type MemberBenefitKey = 'checking' | 'meal' | 'food' | 'fuel'
 
@@ -100,6 +102,7 @@ type TxPrefill = {
   amount?: string
   date?: string
   credit_card?: string
+  wallet_id?: number
 }
 
 const currency = new Intl.NumberFormat('pt-BR', {
@@ -318,6 +321,7 @@ export default function App() {
   const [billPayments, setBillPayments] = useState<BillPayment[]>([])
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([])
   const [wallets, setWallets] = useState<Wallet[]>([])
+  const [cardInvoices, setCardInvoices] = useState<CardInvoice[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [forecast, setForecast] = useState<MonthlyForecast | null>(null)
   const [memberFilter, setMemberFilter] = useState<number | 'all'>('all')
@@ -413,7 +417,10 @@ export default function App() {
     wallet_id: 0,
     from_wallet_id: 0,
     amount: '',
+    year: new Date().getFullYear(),
+    month: new Date().getMonth() + 1,
   })
+  const [importWalletId, setImportWalletId] = useState(0)
 
   const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
@@ -489,6 +496,11 @@ export default function App() {
     [billPayments],
   )
 
+  const invoiceByWalletId = useMemo(
+    () => new Map(cardInvoices.map((invoice) => [invoice.wallet_id, invoice])),
+    [cardInvoices],
+  )
+
   const unpaidBills = useMemo(
     () => listedBills.filter((bill) => !paidBillIds.has(bill.id)),
     [listedBills, paidBillIds],
@@ -497,20 +509,34 @@ export default function App() {
     () => listedBills.filter((bill) => paidBillIds.has(bill.id)),
     [listedBills, paidBillIds],
   )
+  const unpaidCashBills = useMemo(
+    () => unpaidBills.filter((bill) => {
+      const wallet = billWallet(wallets, bill)
+      return !wallet || !isCreditWallet(wallet)
+    }),
+    [unpaidBills, wallets],
+  )
+  const visibleCardInvoices = useMemo(
+    () => cardInvoices.filter((invoice) => {
+      const wallet = wallets.find((item) => item.id === invoice.wallet_id)
+      return wallet && (memberFilter === 'all' || wallet.member_id === memberFilter)
+    }),
+    [cardInvoices, wallets, memberFilter],
+  )
   const unpaidTotal = useMemo(() => {
     const billsDue = unpaidBills.reduce((sum, bill) => {
+      const wallet = billWallet(wallets, bill)
+      if (wallet && isCreditWallet(wallet)) return sum
       if (memberFilter === 'all') return sum + billChargeInMonth(bill, year, month)
       return sum + billShareForMember(bill, memberFilter, year, month)
     }, 0)
-    const invoices = wallets
-      .filter(
-        (wallet) =>
-          isCreditWallet(wallet) &&
-          (memberFilter === 'all' || wallet.member_id === memberFilter),
-      )
-      .reduce((sum, wallet) => sum + (wallet.invoice_balance ?? 0), 0)
+    const invoices = cardInvoices.reduce((sum, invoice) => {
+      const wallet = wallets.find((item) => item.id === invoice.wallet_id)
+      if (!wallet || (memberFilter !== 'all' && wallet.member_id !== memberFilter)) return sum
+      return sum + invoice.outstanding
+    }, 0)
     return billsDue + invoices
-  }, [unpaidBills, memberFilter, year, month, wallets])
+  }, [unpaidBills, memberFilter, year, month, wallets, cardInvoices])
 
   const listedGoals = useMemo(() => {
     return [...savingsGoals]
@@ -590,7 +616,7 @@ export default function App() {
     setError('')
     setLoading(true)
     try {
-      const [cats, mems, txs, billList, payments, goals, fc, walletList] = await Promise.all([
+      const [cats, mems, txs, billList, payments, goals, fc, walletList, invoices] = await Promise.all([
         api.listCategories(),
         api.listMembers(),
         api.listTransactions(),
@@ -599,6 +625,7 @@ export default function App() {
         api.listSavingsGoals(),
         api.monthlyForecast(year, month),
         api.listWallets(),
+        api.listCardInvoices(year, month),
       ])
       setCategories(cats)
       setMembers(mems)
@@ -608,6 +635,7 @@ export default function App() {
       setSavingsGoals(goals)
       setForecast(fc)
       setWallets(walletList)
+      setCardInvoices(invoices)
 
       const people = mems.filter((member) => !isCompanyMemberName(member.name))
       setSavedAccounts(syncSavedAccountNames(people))
@@ -896,7 +924,7 @@ export default function App() {
       setTxForm({
         category_id: prefill?.category_id || market?.id || 0,
         member_id: memberId,
-        wallet_id: preferredSpendWallet(wallets, memberId)?.id ?? 0,
+        wallet_id: prefill?.wallet_id ?? preferredSpendWallet(wallets, memberId)?.id ?? 0,
         description: prefill?.description || (credit_card ? creditCardLabel(credit_card) : ''),
         amount: prefill?.amount ?? '',
         date: prefill?.date || todayISO(),
@@ -904,6 +932,20 @@ export default function App() {
       })
     }
     setSheet(mode)
+  }
+
+  function openStatementImport(walletId?: number) {
+    const memberId = defaultMemberId()
+    const fallback = preferredSpendWallet(wallets, memberId)
+    setEditingTxId(null)
+    setEditingMemberId(null)
+    setEditingBillId(null)
+    setEditingCategoryId(null)
+    setEditingGoalId(null)
+    setEditingWalletId(null)
+    setPayingBill(null)
+    setImportWalletId(walletId ?? fallback?.id ?? 0)
+    setSheet('import-statement')
   }
 
   function openWalletSheet(wallet: Wallet) {
@@ -948,21 +990,23 @@ export default function App() {
       kind,
       member_id: memberId,
       balance: '',
-      closing_day: kind === 'credit' ? '10' : '',
-      due_day: kind === 'credit' ? '17' : '',
+      closing_day: kind === 'credit' ? '14' : '',
+      due_day: kind === 'credit' ? '21' : '',
       credit_limit: '',
       invoice_balance: '',
     })
     setSheet('wallet')
   }
 
-  function openPayInvoice(wallet: Wallet) {
+  function openPayInvoice(wallet: Wallet, invoice = invoiceByWalletId.get(wallet.id)) {
     const ownerId = wallet.member_id ?? defaultMemberId()
     const sources = invoicePayWallets(wallets, ownerId)
     setInvoiceForm({
       wallet_id: wallet.id,
       from_wallet_id: sources[0]?.id ?? 0,
-      amount: wallet.invoice_balance ? String(wallet.invoice_balance).replace('.', ',') : '',
+      amount: invoice?.outstanding ? String(invoice.outstanding).replace('.', ',') : '',
+      year: invoice?.year ?? year,
+      month: invoice?.month ?? month,
     })
     setSheet('pay-invoice')
   }
@@ -1337,6 +1381,8 @@ export default function App() {
       await api.payWalletInvoice(invoiceForm.wallet_id, {
         amount,
         from_wallet_id: invoiceForm.from_wallet_id,
+        year: invoiceForm.year,
+        month: invoiceForm.month,
       })
       setSheet(null)
       await refresh()
@@ -1400,6 +1446,7 @@ export default function App() {
   function sheetHeading() {
     if (sheet === 'pay-bill') return 'Confirmar pagamento'
     if (sheet === 'pay-invoice') return 'Pagar fatura'
+    if (sheet === 'import-statement') return 'Importar extrato'
     if (sheet === 'wallet') {
       if (editingWalletId) return walletForm.kind === 'credit' ? 'Editar cartão' : 'Editar saldo'
       if (walletForm.kind === 'credit') return 'Novo cartão'
@@ -1449,9 +1496,12 @@ export default function App() {
   }
 
   function renderFaturaRow(card: Wallet) {
-    const invoice = card.invoice_balance ?? 0
-    const paid = invoice <= 0
-    const overdue = !paid && card.due_day != null && isBillOverdue(card.due_day, year, month)
+    const invoice = invoiceByWalletId.get(card.id)
+    const amount = invoice?.outstanding ?? 0
+    const paid = amount <= 0
+    const overdue = !paid && invoice?.due_date
+      ? new Date(`${invoice.due_date}T23:59:59`).getTime() < Date.now()
+      : false
     return (
       <article
         key={`fatura-${card.id}`}
@@ -1462,9 +1512,7 @@ export default function App() {
           className={`check-pay${paid ? ' on' : ''}`}
           aria-pressed={paid}
           aria-label={paid ? 'Fatura paga' : `Pagar fatura ${card.name}`}
-          onClick={() => {
-            if (!paid) openPayInvoice(card)
-          }}
+          onClick={() => { if (!paid) openPayInvoice(card, invoice) }}
         >
           {paid ? (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
@@ -1475,12 +1523,14 @@ export default function App() {
         <div className="row-main">
           <h3>Fatura {card.name}</h3>
           <p>
-            vence dia {card.due_day ?? '—'}
+            fecha {invoice?.closing_date ? formatDate(invoice.closing_date).split('-').reverse().join('/') : `dia ${card.closing_day ?? '—'}`}
+            {' · '}
+            vence {invoice?.due_date ? formatDate(invoice.due_date).split('-').reverse().join('/') : `dia ${card.due_day ?? '—'}`}
             {overdue ? ' · atrasada' : ''}
             {paid ? ' · em dia' : ' · pagar no Pix / conta'}
           </p>
         </div>
-        <div className={`amount ${paid ? 'income' : 'expense'}`}>{currency.format(invoice)}</div>
+        <div className={`amount ${paid ? 'income' : 'expense'}`}>{currency.format(amount)}</div>
       </article>
     )
   }
@@ -1992,6 +2042,10 @@ export default function App() {
               <strong>Freelancer</strong>
               <span>entrada extra</span>
             </button>
+            <button type="button" className="ledger-extra" onClick={() => openStatementImport()}>
+              <strong>Extrato</strong>
+              <span>CSV, OFX ou PDF</span>
+            </button>
           </div>
         </section>
       )}
@@ -2008,14 +2062,11 @@ export default function App() {
             {(listedBills.length > 0 || listedCreditCards.length > 0) && (
               <div
                 className={`progress checklist-progress ${
-                  unpaidBills.length === 0 && listedCreditCards.every((card) => (card.invoice_balance ?? 0) <= 0)
+                  unpaidCashBills.length === 0 && visibleCardInvoices.every((invoice) => invoice.outstanding <= 0)
                     ? ''
-                    : unpaidBills.some((bill) => isBillOverdue(bill.due_day, year, month)) ||
-                        listedCreditCards.some(
-                          (card) =>
-                            (card.invoice_balance ?? 0) > 0 &&
-                            card.due_day != null &&
-                            isBillOverdue(card.due_day, year, month),
+                    : unpaidCashBills.some((bill) => isBillOverdue(bill.due_day, year, month)) ||
+                        visibleCardInvoices.some(
+                          (invoice) => invoice.outstanding > 0 && new Date(`${invoice.due_date}T23:59:59`).getTime() < Date.now(),
                         )
                       ? 'warn'
                       : ''
@@ -2024,9 +2075,13 @@ export default function App() {
                 <i
                   style={{
                     width: `${(() => {
-                      const cardPaid = listedCreditCards.filter((card) => (card.invoice_balance ?? 0) <= 0).length
-                      const total = listedBills.length + listedCreditCards.length
-                      return total === 0 ? 0 : ((paidBills.length + cardPaid) / total) * 100
+                      const paidCashBills = paidBills.filter((bill) => {
+                        const wallet = billWallet(wallets, bill)
+                        return !wallet || !isCreditWallet(wallet)
+                      }).length
+                      const cardPaid = visibleCardInvoices.filter((invoice) => invoice.outstanding <= 0).length
+                      const total = unpaidCashBills.length + paidCashBills + visibleCardInvoices.length
+                      return total === 0 ? 0 : ((paidCashBills + cardPaid) / total) * 100
                     })()}%`,
                   }}
                 />
@@ -2095,6 +2150,25 @@ export default function App() {
                               {onCard.map((bill) => renderBillRow(bill))}
                               {renderFaturaRow(card)}
                             </div>
+                            <button
+                              type="button"
+                              className="ghost"
+                              style={{ margin: '0.35rem 0 0.85rem' }}
+                              onClick={() => openStatementImport(card.id)}
+                            >
+                              Importar fatura do {card.name}
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              style={{ margin: '0.35rem 0 0.85rem 0.35rem' }}
+                              onClick={() => openSheet('expense', {
+                                member_id: card.member_id ?? defaultMemberId(),
+                                wallet_id: card.id,
+                              })}
+                            >
+                              Adicionar compra manualmente
+                            </button>
                           </div>
                         )
                       })}
@@ -2690,10 +2764,25 @@ export default function App() {
               </button>
             </header>
 
-            {sheet === 'pay-invoice' ? (
+            {sheet === 'import-statement' ? (
+              <StatementImport
+                categories={categories}
+                members={personMembers}
+                wallets={wallets}
+                defaultMemberId={defaultMemberId()}
+                defaultWalletId={importWalletId}
+                year={year}
+                month={month}
+                onClose={() => setSheet(null)}
+                onImported={refresh}
+              />
+            ) : sheet === 'pay-invoice' ? (
               <form className="form" onSubmit={submitPayInvoice}>
                 {(() => {
                   const card = wallets.find((wallet) => wallet.id === invoiceForm.wallet_id)
+                  const invoice = cardInvoices.find(
+                    (item) => item.wallet_id === invoiceForm.wallet_id && item.year === invoiceForm.year && item.month === invoiceForm.month,
+                  )
                   const sources = invoicePayWallets(
                     wallets,
                     card?.member_id ?? defaultMemberId(),
@@ -2701,7 +2790,8 @@ export default function App() {
                   return (
                     <>
                       <p className="meta">
-                        {card?.name ?? 'Cartão'} · fatura {currency.format(card?.invoice_balance ?? 0)}
+                        {card?.name ?? 'Cartão'} · fatura {String(invoiceForm.month).padStart(2, '0')}/{invoiceForm.year}
+                        {' · '}{currency.format(invoice?.outstanding ?? 0)}
                       </p>
                       <label>
                         Valor
@@ -2810,7 +2900,12 @@ export default function App() {
                           key={issuer.id}
                           type="button"
                           className={walletForm.name === issuer.label ? 'chip active' : 'chip'}
-                          onClick={() => setWalletForm((p) => ({ ...p, name: issuer.label }))}
+                          onClick={() => setWalletForm((p) => ({
+                            ...p,
+                            name: issuer.label,
+                            closing_day: issuer.id === 'nubank' ? '14' : p.closing_day,
+                            due_day: issuer.id === 'nubank' ? '21' : p.due_day,
+                          }))}
                         >
                           {issuer.label}
                         </button>
@@ -2874,26 +2969,9 @@ export default function App() {
                         placeholder="5000"
                       />
                     </label>
-                    <label>
-                      Fatura atual
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={walletForm.invoice_balance}
-                        onChange={(e) =>
-                          setWalletForm((p) => ({ ...p, invoice_balance: e.target.value }))
-                        }
-                        placeholder="0,00"
-                      />
-                    </label>
-                    {editingWalletId && parseLocaleNumber(walletForm.invoice_balance || '0') > 0 ? (
-                      <button type="button" className="ghost" onClick={() => {
-                        const card = wallets.find((wallet) => wallet.id === editingWalletId)
-                        if (card) openPayInvoice(card)
-                      }}>
-                        Pagar fatura
-                      </button>
-                    ) : null}
+                    <p className="meta" style={{ margin: 0 }}>
+                      A fatura é calculada pelas compras manuais e pelos extratos importados, respeitando o fechamento.
+                    </p>
                   </>
                 ) : (
                   <label>

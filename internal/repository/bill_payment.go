@@ -71,7 +71,8 @@ func (s *Store) SetBillPaid(ctx context.Context, billID, year, month int, paid b
 	defer tx.Rollback()
 
 	if hasExisting && existing.WalletID != nil && existing.Amount != 0 {
-		if err := adjustWalletTx(ctx, tx, *existing.WalletID, existing.Amount); err != nil {
+		chargeDate := billChargeDate(bill, year, month)
+		if err := adjustWalletAtDateTx(ctx, tx, *existing.WalletID, existing.Amount, &chargeDate); err != nil {
 			return err
 		}
 	}
@@ -98,7 +99,8 @@ func (s *Store) SetBillPaid(ctx context.Context, billID, year, month int, paid b
 	}
 	amount = math.Round(amount*100) / 100
 
-	if err := adjustWalletTx(ctx, tx, wallet.ID, -amount); err != nil {
+	chargeDate := billChargeDate(bill, year, month)
+	if err := adjustWalletAtDateTx(ctx, tx, wallet.ID, -amount, &chargeDate); err != nil {
 		return err
 	}
 
@@ -195,37 +197,63 @@ func (s *Store) resolvePayerWallet(ctx context.Context, memberID int, walletID *
 }
 
 func adjustWalletTx(ctx context.Context, tx *sql.Tx, walletID int, delta float64) error {
+	return adjustWalletAtDateTx(ctx, tx, walletID, delta, nil)
+}
+
+func adjustWalletAtDateTx(ctx context.Context, tx *sql.Tx, walletID int, delta float64, at *time.Time) error {
 	var (
-		kind    string
-		balance float64
-		invoice float64
+		kind       string
+		balance    float64
+		invoice    float64
+		closingDay sql.NullInt64
+		dueDay     sql.NullInt64
 	)
 	err := tx.QueryRowContext(
 		ctx,
-		`SELECT kind, balance, invoice_balance FROM wallets WHERE id = ?`,
+		`SELECT kind, balance, invoice_balance, closing_day, due_day FROM wallets WHERE id = ?`,
 		walletID,
-	).Scan(&kind, &balance, &invoice)
+	).Scan(&kind, &balance, &invoice, &closingDay, &dueDay)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("get wallet balance: %w", err)
 	}
-	updated := models.ApplyWalletDelta(models.Wallet{
+	wallet := models.Wallet{
+		ID:             walletID,
 		Kind:           kind,
 		Balance:        balance,
 		InvoiceBalance: invoice,
-	}, delta)
+		ClosingDay:     fromNullInt(closingDay),
+		DueDay:         fromNullInt(dueDay),
+	}
 	if models.IsCredit(kind) {
+		if at != nil {
+			return adjustCardInvoiceTx(ctx, tx, wallet, *at, -delta)
+		}
+		updated := models.ApplyWalletDelta(wallet, delta)
 		if _, err := tx.ExecContext(ctx, `UPDATE wallets SET invoice_balance = ? WHERE id = ?`, updated.InvoiceBalance, walletID); err != nil {
 			return fmt.Errorf("adjust wallet invoice: %w", err)
 		}
 		return nil
 	}
+	updated := models.ApplyWalletDelta(wallet, delta)
 	if _, err := tx.ExecContext(ctx, `UPDATE wallets SET balance = ? WHERE id = ?`, updated.Balance, walletID); err != nil {
 		return fmt.Errorf("adjust wallet: %w", err)
 	}
 	return nil
+}
+
+func billChargeDate(bill models.Bill, year, month int) time.Time {
+	last := time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	day := bill.DueDay
+	if day < 1 {
+		day = 1
+	}
+	if day > last {
+		day = last
+	}
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 }
 
 func scanBillPayment(row interface {

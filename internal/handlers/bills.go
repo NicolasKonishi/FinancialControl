@@ -28,6 +28,9 @@ type Bills struct {
 	Store      BillStore
 	Categories CategoryStore
 	Members    MemberStore
+	Wallets    interface {
+		ListWallets(ctx context.Context) ([]models.Wallet, error)
+	}
 }
 
 // ListOrCreate handles GET and POST /bills.
@@ -186,7 +189,8 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 		normalizedEnd = &trimmed
 	}
 
-	if _, err := h.Categories.GetCategoryByID(r.Context(), input.CategoryID); err != nil {
+	category, err := h.Categories.GetCategoryByID(r.Context(), input.CategoryID)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			http.Error(w, "category not found", http.StatusBadRequest)
 			return models.Bill{}, false
@@ -207,6 +211,26 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 		}
 	}
 
+	walletID := input.WalletID
+	if walletID == nil && isCardCategory(category.Name) && h.Wallets != nil {
+		wallets, err := h.Wallets.ListWallets(r.Context())
+		if err != nil {
+			writeStoreError(w, err, "wallet not found")
+			return models.Bill{}, false
+		}
+		for _, wallet := range wallets {
+			if !models.IsCredit(wallet.Kind) {
+				continue
+			}
+			if len(memberIDs) == 1 && wallet.MemberID != nil && *wallet.MemberID != memberIDs[0] {
+				continue
+			}
+			id := wallet.ID
+			walletID = &id
+			break
+		}
+	}
+
 	return models.Bill{
 		Name:         strings.TrimSpace(input.Name),
 		Amount:       amount,
@@ -214,7 +238,7 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 		InterestRate: interestRate,
 		CategoryID:   input.CategoryID,
 		MemberIDs:    memberIDs,
-		WalletID:     input.WalletID,
+		WalletID:     walletID,
 		DueDay:       input.DueDay,
 		Frequency:    frequency,
 		Recurrence:   recurrence,
@@ -222,6 +246,11 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 		EndMonth:     normalizedEnd,
 		Notes:        strings.TrimSpace(input.Notes),
 	}, true
+}
+
+func isCardCategory(name string) bool {
+	normalized := strings.NewReplacer("ã", "a", "á", "a", "â", "a").Replace(strings.ToLower(strings.TrimSpace(name)))
+	return normalized == "cartao"
 }
 
 func uniquePositiveIDs(ids []int) []int {

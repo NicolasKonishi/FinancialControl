@@ -10,8 +10,10 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from statement_parser import ParsedStatement, StatementError, parse_statement_bytes
 
 app = FastAPI(title="Financial Analysis", version="0.1.0")
 
@@ -91,4 +93,51 @@ def monthly_analysis(payload: MonthlyAnalysisRequest) -> MonthlyAnalysisResponse
         balance=round(total_income - total_expense, 2),
         by_category=by_category,
         transaction_count=len(payload.transactions),
+    )
+
+
+class StatementItem(BaseModel):
+    date: str
+    description: str
+    amount: float
+    kind: str
+    suggested_icon: str
+
+
+class StatementParseResponse(BaseModel):
+    issuer: str
+    period_start: str | None = None
+    period_end: str | None = None
+    items: list[StatementItem]
+
+
+@app.post("/statements/parse", response_model=StatementParseResponse)
+async def parse_statement(
+    request: Request,
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    month: int | None = Query(default=None, ge=1, le=12),
+) -> StatementParseResponse:
+    data = await request.body()
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file too large")
+    if not data:
+        raise HTTPException(status_code=400, detail="empty")
+    try:
+        parsed: ParsedStatement = parse_statement_bytes(data, year, month)
+    except StatementError as exc:
+        raise HTTPException(status_code=400, detail=exc.code) from exc
+    return StatementParseResponse(
+        issuer=parsed.issuer,
+        period_start=parsed.period_start,
+        period_end=parsed.period_end,
+        items=[
+            StatementItem(
+                date=item.date,
+                description=item.description,
+                amount=item.amount,
+                kind=item.kind,
+                suggested_icon=item.suggested_icon,
+            )
+            for item in parsed.items
+        ],
     )

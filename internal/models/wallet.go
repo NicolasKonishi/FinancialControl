@@ -55,6 +55,8 @@ type UpdateWalletInput struct {
 type PayInvoiceInput struct {
 	Amount       float64 `json:"amount"`
 	FromWalletID int     `json:"from_wallet_id"`
+	Year         int     `json:"year"`
+	Month        int     `json:"month"`
 }
 
 // ValidWalletKind reports whether kind is supported.

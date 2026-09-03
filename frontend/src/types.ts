@@ -165,3 +165,58 @@ export type Wallet = {
   invoice_balance?: number
   created_at: string
 }
+
+export type CardInvoice = {
+  wallet_id: number
+  year: number
+  month: number
+  closing_date: string
+  due_date: string
+  amount: number
+  paid_amount: number
+  outstanding: number
+  paid: boolean
+  source: 'calculated' | 'statement' | string
+  statement_period_start?: string | null
+  statement_period_end?: string | null
+  statement_balance?: number | null
+  updated_at?: string | null
+}
+
+export type StatementKind = 'expense' | 'income' | 'payment' | 'refund' | 'transfer' | string
+
+export type StatementPreviewItem = {
+  index: number
+  date: string
+  description: string
+  amount: number
+  kind: StatementKind
+  category_id: number
+  suggested_icon: string
+  already_recorded: boolean
+  matched_transaction_id?: number | null
+  selected: boolean
+}
+
+export type StatementPreview = {
+  issuer: string
+  statement_type: 'account' | 'credit_card' | string
+  period_start?: string | null
+  period_end?: string | null
+  balance?: number | null
+  invoice_year?: number | null
+  invoice_month?: number | null
+  closing_date?: string | null
+  due_date?: string | null
+  wallet_id?: number | null
+  member_id?: number | null
+  new_count: number
+  matched_count: number
+  skipped_count: number
+  items: StatementPreviewItem[]
+}
+
+export type StatementImportResult = {
+  created: number
+  items: Transaction[]
+}

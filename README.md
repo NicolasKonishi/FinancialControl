@@ -29,6 +29,7 @@ Fluxo típico:
 
 1. A família cadastra pessoas e salários mensais.
 2. Lança gastos (mercado, comida, transporte…) e extras (freelancer).
+   Também pode mandar o **PDF da fatura do cartão** para o app marcar o que faltou.
 3. O app mostra o que entrou, o que saiu e quanto ainda dá para gastar no mês.
 
 ---
@@ -78,7 +79,7 @@ Fluxo típico:
 | Área | O que faz |
 |------|-----------|
 | **Família** | Cadastro de pessoas + salário mensal de cada uma (editar/excluir). |
-| **Gastos** | Tabela do mês: entradas e saídas, com categoria e ícone. |
+| **Gastos** | Tabela do mês: entradas e saídas, com categoria e ícone. Importa extrato em PDF do cartão e lança o que ainda não estava marcado. |
 | **Início** | Previsão do mês, atalhos de Saída / Entrada / Extra (freelancer). |
 | **Categorias** | Vêm pré-carregadas (Comida, Mercado, Transporte, Casa, Saúde, Lazer, Salário, Freelancer), cada uma com ícone. |
 
@@ -230,6 +231,9 @@ DELETE /transactions/{id}
 
 GET    /forecast/monthly?year=2026&month=8
 GET    /analysis/monthly?year=2026&month=8
+
+POST   /statements/preview   (multipart: file, wallet_id, member_id, year, month)
+POST   /statements/import
 ```
 
 ---

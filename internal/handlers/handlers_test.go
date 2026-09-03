@@ -1,10 +1,12 @@
 package handlers_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -680,6 +682,35 @@ func (m *memoryStore) PayWalletInvoice(_ context.Context, creditWalletID int, in
 	return credit, nil
 }
 
+func (m *memoryStore) ReconcileCardInvoice(
+	_ context.Context,
+	walletID, year, month int,
+	amount float64,
+	periodStart, periodEnd *string,
+) (models.CardInvoice, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	wallet, ok := m.wallets[walletID]
+	if !ok {
+		return models.CardInvoice{}, repository.ErrNotFound
+	}
+	wallet.InvoiceBalance = math.Round(amount*100) / 100
+	m.wallets[walletID] = wallet
+	cycle := models.CardCycleForDueMonth(wallet, year, month)
+	return models.FinalizeCardInvoice(models.CardInvoice{
+		WalletID:             walletID,
+		Year:                 year,
+		Month:                month,
+		ClosingDate:          cycle.ClosingDate.Format("2006-01-02"),
+		DueDate:              cycle.DueDate.Format("2006-01-02"),
+		Amount:               amount,
+		Source:               "statement",
+		StatementPeriodStart: periodStart,
+		StatementPeriodEnd:   periodEnd,
+		StatementBalance:     &amount,
+	}), nil
+}
+
 type stubCDI struct {
 	rate float64
 }
@@ -1201,5 +1232,189 @@ func TestWalletsCreateAndUpdate(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Fatalf("wallets len = %d, want 2", len(items))
+	}
+}
+
+type fakeStatementParser struct {
+	result models.ParsedStatement
+	err    error
+}
+
+func (f fakeStatementParser) ParseStatement(_ context.Context, _ []byte, _, _ int) (models.ParsedStatement, error) {
+	return f.result, f.err
+}
+
+func TestStatementPreviewAndImport(t *testing.T) {
+	store := newMemoryStore()
+	food, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Comida", Icon: "food"})
+	transport, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Transporte", Icon: "transport"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana", MonthlySalary: 3000})
+	closing, due := 10, 17
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name:           "Nubank",
+		Kind:           models.WalletCredit,
+		MemberID:       &member.ID,
+		ClosingDay:     &closing,
+		DueDay:         &due,
+		CreditLimit:    5000,
+		InvoiceBalance: 1500,
+	})
+	_, _ = store.CreateTransaction(context.Background(), models.Transaction{
+		CategoryID:  food.ID,
+		MemberID:    &member.ID,
+		Type:        models.TransactionTypeExpense,
+		Description: "iFood",
+		Amount:      42.90,
+		Date:        time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC),
+	})
+
+	h := &handlers.Statements{
+		Parser: fakeStatementParser{result: models.ParsedStatement{
+			Issuer: "nubank",
+			Items: []models.ParsedStatementItem{
+				{Date: "2026-07-10", Description: "IFOOD", Amount: 42.90, Kind: "expense", SuggestedIcon: "food"},
+				{Date: "2026-07-11", Description: "UBER TRIP", Amount: 18.50, Kind: "expense", SuggestedIcon: "transport"},
+				{Date: "2026-07-08", Description: "Pagamento recebido", Amount: 1234.56, Kind: "payment", SuggestedIcon: "other"},
+			},
+		}},
+		Transactions: store,
+		Categories:   store,
+		Members:      store,
+		Wallets:      store,
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "fatura.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("%PDF-fake"))
+	_ = writer.WriteField("wallet_id", fmt.Sprintf("%d", card.ID))
+	_ = writer.WriteField("member_id", fmt.Sprintf("%d", member.ID))
+	_ = writer.WriteField("year", "2026")
+	_ = writer.WriteField("month", "8")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	previewReq := httptest.NewRequest(http.MethodPost, "/statements/preview", &buf)
+	previewReq.Header.Set("Content-Type", writer.FormDataContentType())
+	previewRec := httptest.NewRecorder()
+	h.Preview(previewRec, previewReq)
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", previewRec.Code, previewRec.Body.String())
+	}
+	var preview models.StatementPreview
+	if err := json.NewDecoder(previewRec.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.NewCount != 1 || preview.MatchedCount != 1 || preview.SkippedCount != 1 {
+		t.Fatalf("counts new=%d matched=%d skipped=%d", preview.NewCount, preview.MatchedCount, preview.SkippedCount)
+	}
+
+	importBody := fmt.Sprintf(
+		`{"wallet_id":%d,"member_id":%d,"apply_to_invoice":false,"items":[{"date":"2026-07-11","description":"UBER TRIP","amount":18.5,"type":"expense","category_id":%d}]}`,
+		card.ID, member.ID, transport.ID,
+	)
+	importReq := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(importBody))
+	importRec := httptest.NewRecorder()
+	h.Import(importRec, importReq)
+	if importRec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d body=%s", importRec.Code, importRec.Body.String())
+	}
+
+	updated, err := store.GetWalletByID(context.Background(), card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.InvoiceBalance != 1500 {
+		t.Fatalf("invoice after import without apply = %v, want 1500", updated.InvoiceBalance)
+	}
+	txs, err := store.ListTransactions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txs) != 2 {
+		t.Fatalf("transactions after import = %d, want 2", len(txs))
+	}
+}
+
+func TestStatementPreviewCSVWithoutParser(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Comida", Icon: "food"})
+	h := &handlers.Statements{
+		Transactions: store,
+		Categories:   store,
+		Members:      store,
+		Wallets:      store,
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "extrato.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("Data;Descricao;Valor\n10/07/2026;IFOOD;42,90\n11/07/2026;UBER TRIP;18,50\n"))
+	_ = writer.WriteField("year", "2026")
+	_ = writer.WriteField("month", "7")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/statements/preview", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.Preview(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var preview models.StatementPreview
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.NewCount != 2 {
+		t.Fatalf("new_count = %d, want 2", preview.NewCount)
+	}
+}
+
+func TestStatementPreviewOFXWithoutParser(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Outro", Icon: "other"})
+	h := &handlers.Statements{
+		Transactions: store,
+		Categories:   store,
+		Members:      store,
+		Wallets:      store,
+	}
+
+	ofx := []byte("OFXHEADER:100\n<OFX><STMTTRN><TRNTYPE>DEBIT</TRNTYPE><DTPOSTED>20260901000000</DTPOSTED><TRNAMT>-43.46</TRNAMT><MEMO>Compra no débito - SAO ROQUE</MEMO></STMTTRN></OFX>")
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "extrato.ofx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write(ofx)
+	_ = writer.WriteField("year", "2026")
+	_ = writer.WriteField("month", "9")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/statements/preview", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.Preview(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var preview models.StatementPreview
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.NewCount != 1 || preview.Items[0].Kind != "expense" {
+		t.Fatalf("preview = %+v", preview)
 	}
 }

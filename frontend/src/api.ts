@@ -5,11 +5,14 @@ import type {
   BillPayment,
   BillRecurrence,
   Category,
+  CardInvoice,
   Member,
   MonthlyForecast,
   SavingsGoal,
   SavingsMonthAmount,
   SavingsPlan,
+  StatementImportResult,
+  StatementPreview,
   Transaction,
   Wallet,
   WalletKind,
@@ -221,6 +224,51 @@ export const api = {
     },
   ) => request<Wallet>(`/wallets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteWallet: (id: number) => request<void>(`/wallets/${id}`, { method: 'DELETE' }),
-  payWalletInvoice: (id: number, body: { amount: number; from_wallet_id: number }) =>
+  payWalletInvoice: (id: number, body: { amount: number; from_wallet_id: number; year: number; month: number }) =>
     request<Wallet>(`/wallets/${id}/pay-invoice`, { method: 'POST', body: JSON.stringify(body) }),
+
+  listCardInvoices: (year: number, month: number) =>
+    request<CardInvoice[]>(`/card-invoices?year=${year}&month=${month}`),
+
+  previewStatement: async (file: File, body: {
+    wallet_id?: number | null
+    member_id?: number | null
+    year: number
+    month: number
+  }) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (body.wallet_id) form.append('wallet_id', String(body.wallet_id))
+    if (body.member_id) form.append('member_id', String(body.member_id))
+    form.append('year', String(body.year))
+    form.append('month', String(body.month))
+    const response = await fetch(`${API_URL}/statements/preview`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      const message = await response.text()
+      throw new Error(message.trim() || `HTTP ${response.status}`)
+    }
+    return response.json() as Promise<StatementPreview>
+  },
+
+  importStatement: (body: {
+    wallet_id?: number | null
+    member_id?: number | null
+    apply_to_invoice?: boolean
+    statement_type?: string
+    invoice_year?: number | null
+    invoice_month?: number | null
+    statement_balance?: number | null
+    period_start?: string | null
+    period_end?: string | null
+    items: Array<{
+      date: string
+      description: string
+      amount: number
+      type: 'income' | 'expense'
+      category_id: number
+    }>
+  }) => request<StatementImportResult>('/statements/import', { method: 'POST', body: JSON.stringify(body) }),
 }

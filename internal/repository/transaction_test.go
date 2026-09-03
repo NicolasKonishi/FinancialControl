@@ -56,6 +56,19 @@ func TestCreateTransactionDebitsWalletWithoutDeadlock(t *testing.T) {
 			date TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		);
+		CREATE TABLE card_invoices (
+			wallet_id INTEGER NOT NULL,
+			year INTEGER NOT NULL,
+			month INTEGER NOT NULL,
+			amount REAL NOT NULL DEFAULT 0,
+			paid_amount REAL NOT NULL DEFAULT 0,
+			source TEXT NOT NULL DEFAULT 'calculated',
+			statement_period_start TEXT,
+			statement_period_end TEXT,
+			statement_balance REAL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (wallet_id, year, month)
+		);
 	`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		t.Fatalf("schema: %v", err)
@@ -152,6 +165,19 @@ func TestCreditCardExpenseRaisesInvoiceAndPayInvoiceDebitsChecking(t *testing.T)
 			date TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		);
+		CREATE TABLE card_invoices (
+			wallet_id INTEGER NOT NULL,
+			year INTEGER NOT NULL,
+			month INTEGER NOT NULL,
+			amount REAL NOT NULL DEFAULT 0,
+			paid_amount REAL NOT NULL DEFAULT 0,
+			source TEXT NOT NULL DEFAULT 'calculated',
+			statement_period_start TEXT,
+			statement_period_end TEXT,
+			statement_balance REAL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (wallet_id, year, month)
+		);
 	`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		t.Fatalf("schema: %v", err)
@@ -215,6 +241,8 @@ func TestCreditCardExpenseRaisesInvoiceAndPayInvoiceDebitsChecking(t *testing.T)
 	paid, err := store.PayWalletInvoice(ctx, card.ID, models.PayInvoiceInput{
 		Amount:       80,
 		FromWalletID: checking.ID,
+		Year:         2026,
+		Month:        9,
 	})
 	if err != nil {
 		t.Fatalf("pay invoice: %v", err)

@@ -25,6 +25,7 @@ func New(deps Dependencies) http.Handler {
 		Store:      deps.Store,
 		Categories: deps.Store,
 		Members:    deps.Store,
+		Wallets:    deps.Store,
 	}
 	transactions := &handlers.Transactions{
 		Store:      deps.Store,
@@ -45,6 +46,14 @@ func New(deps Dependencies) http.Handler {
 	wallets := &handlers.Wallets{
 		Store:   deps.Store,
 		Members: deps.Store,
+	}
+	cardInvoices := &handlers.CardInvoices{Store: deps.Store}
+	statements := &handlers.Statements{
+		Parser:       deps.AnalysisClient,
+		Transactions: deps.Store,
+		Categories:   deps.Store,
+		Members:      deps.Store,
+		Wallets:      deps.Store,
 	}
 
 	mux := http.NewServeMux()
@@ -82,6 +91,10 @@ func New(deps Dependencies) http.Handler {
 	mux.HandleFunc("PUT /wallets/{id}", wallets.Update)
 	mux.HandleFunc("DELETE /wallets/{id}", wallets.Delete)
 	mux.HandleFunc("POST /wallets/{id}/pay-invoice", wallets.PayInvoice)
+	mux.HandleFunc("GET /card-invoices", cardInvoices.List)
+
+	mux.HandleFunc("POST /statements/preview", statements.Preview)
+	mux.HandleFunc("POST /statements/import", statements.Import)
 
 	mux.HandleFunc("GET /analysis/monthly", analysisHandler.Monthly)
 	mux.HandleFunc("GET /forecast/monthly", forecast.Monthly)
