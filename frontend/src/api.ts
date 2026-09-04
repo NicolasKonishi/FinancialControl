@@ -69,6 +69,13 @@ export const api = {
   updateMember: (id: number, body: { name: string; monthly_salary: number }) =>
     request<Member>(`/members/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteMember: (id: number) => request<void>(`/members/${id}`, { method: 'DELETE' }),
+  setMemberSaveTarget: (id: number, body: { year: number; month: number; amount: number }) =>
+    request<{ member_id: number; year: number; month: number; amount: number }>(
+      `/members/${id}/save-target`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    ),
+  clearMemberSaveTarget: (id: number, year: number, month: number) =>
+    request<void>(`/members/${id}/save-target?year=${year}&month=${month}`, { method: 'DELETE' }),
 
   listBills: () => request<Bill[]>('/bills'),
   createBill: (body: {

@@ -57,6 +57,8 @@ export type MemberForecast = {
   total_available: number
   bill_share: number
   savings_share: number
+  savings_custom: boolean
+  save_capacity: number
   variable_expense: number
   total_to_pay: number
   remaining: number

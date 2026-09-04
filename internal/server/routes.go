@@ -67,6 +67,8 @@ func New(deps Dependencies) http.Handler {
 
 	mux.HandleFunc("/members", members.ListOrCreate)
 	mux.HandleFunc("PUT /members/{id}", members.Update)
+	mux.HandleFunc("PUT /members/{id}/save-target", members.SetSaveTarget)
+	mux.HandleFunc("DELETE /members/{id}/save-target", members.ClearSaveTarget)
 	mux.HandleFunc("DELETE /members/{id}", members.Delete)
 
 	mux.HandleFunc("/bills", bills.ListOrCreate)

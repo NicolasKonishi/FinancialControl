@@ -157,6 +157,76 @@ func (s *Store) DeleteMember(ctx context.Context, id int) error {
 	return nil
 }
 
+// ListMemberSaveTargets returns save targets for year/month.
+func (s *Store) ListMemberSaveTargets(ctx context.Context, year, month int) ([]models.MemberSaveTarget, error) {
+	const query = `
+		SELECT member_id, year, month, amount
+		FROM member_save_targets
+		WHERE year = ? AND month = ?
+		ORDER BY member_id
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, year, month)
+	if err != nil {
+		return nil, fmt.Errorf("list member save targets: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.MemberSaveTarget, 0)
+	for rows.Next() {
+		var item models.MemberSaveTarget
+		if err := rows.Scan(&item.MemberID, &item.Year, &item.Month, &item.Amount); err != nil {
+			return nil, fmt.Errorf("scan member save target: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate member save targets: %w", err)
+	}
+	return items, nil
+}
+
+// SetMemberSaveTarget records how much a person plans to save in year/month.
+func (s *Store) SetMemberSaveTarget(ctx context.Context, memberID, year, month int, amount float64) error {
+	if _, err := s.GetMemberByID(ctx, memberID); err != nil {
+		return err
+	}
+
+	if _, err := s.db.ExecContext(
+		ctx,
+		`
+			INSERT INTO member_save_targets (member_id, year, month, amount)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT (member_id, year, month) DO UPDATE SET amount = excluded.amount
+		`,
+		memberID,
+		year,
+		month,
+		amount,
+	); err != nil {
+		return fmt.Errorf("set member save target: %w", err)
+	}
+	return nil
+}
+
+// DeleteMemberSaveTarget clears a custom save target so the forecast falls back to goals.
+func (s *Store) DeleteMemberSaveTarget(ctx context.Context, memberID, year, month int) error {
+	if _, err := s.GetMemberByID(ctx, memberID); err != nil {
+		return err
+	}
+
+	if _, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM member_save_targets WHERE member_id = ? AND year = ? AND month = ?`,
+		memberID,
+		year,
+		month,
+	); err != nil {
+		return fmt.Errorf("delete member save target: %w", err)
+	}
+	return nil
+}
+
 // SumMonthlySalaries returns the household planned salary total.
 func (s *Store) SumMonthlySalaries(ctx context.Context) (float64, error) {
 	const query = `SELECT COALESCE(SUM(monthly_salary), 0) FROM members`

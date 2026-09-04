@@ -67,6 +67,7 @@ import type {
   Category,
   CategoryIcon,
   Member,
+  MemberForecast,
   MonthlyForecast,
   SavingsEndKind,
   SavingsGoal,
@@ -78,7 +79,7 @@ import type {
 import './index.css'
 
 type View = 'home' | 'ledger' | 'bills' | 'savings' | 'family' | 'categories' | 'statistics' | 'settings' | 'accounts'
-type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | 'import-statement' | null
+type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | 'import-statement' | 'save-target' | null
 type WalletOwner = number | 'joint'
 type MemberBenefitKey = 'checking' | 'meal' | 'food' | 'fuel'
 
@@ -366,6 +367,8 @@ export default function App() {
   const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null)
   const [goalAdjustAmount, setGoalAdjustAmount] = useState('')
   const [goalAdjustWalletId, setGoalAdjustWalletId] = useState(0)
+  const [saveTargetMemberId, setSaveTargetMemberId] = useState<number | null>(null)
+  const [saveTargetAmount, setSaveTargetAmount] = useState('')
 
   const [txForm, setTxForm] = useState({
     category_id: 0,
@@ -623,6 +626,19 @@ export default function App() {
     return list.find((item) => item.member_id === memberFilter) ?? null
   }, [forecast, memberFilter])
 
+  const saveTargetMember = useMemo(() => {
+    if (saveTargetMemberId == null) return null
+    return (forecast?.by_member ?? []).find((item) => item.member_id === saveTargetMemberId) ?? null
+  }, [forecast, saveTargetMemberId])
+
+  const homeSavePeople = useMemo(() => {
+    return (forecast?.by_member ?? []).filter((item) => {
+      if (isCompanyMemberName(item.member_name)) return false
+      if (memberFilter !== 'all' && item.member_id !== memberFilter) return false
+      return true
+    })
+  }, [forecast, memberFilter])
+
   async function refresh() {
     setError('')
     setLoading(true)
@@ -862,6 +878,7 @@ export default function App() {
     setEditingGoalId(null)
     setEditingWalletId(null)
     setPayingBill(null)
+    setSaveTargetMemberId(null)
     if (mode === 'member') {
       setMemberForm({ name: '', monthly_salary: '', benefits: ['checking'] })
     } else if (mode === 'category') {
@@ -1134,6 +1151,40 @@ export default function App() {
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao salvar membro')
+    }
+  }
+
+  function openSaveTargetSheet(item: MemberForecast) {
+    setSaveTargetMemberId(item.member_id)
+    setSaveTargetAmount(item.savings_share > 0 ? String(item.savings_share) : '')
+    setSheet('save-target')
+  }
+
+  async function submitSaveTarget(event: FormEvent) {
+    event.preventDefault()
+    if (!saveTargetMemberId) return
+    const amount = parseLocaleNumber(saveTargetAmount || '0')
+    if (Number.isNaN(amount) || amount < 0) {
+      setError('Informe um valor válido.')
+      return
+    }
+    try {
+      await api.setMemberSaveTarget(saveTargetMemberId, { year, month, amount })
+      setSheet(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao salvar previsão para guardar')
+    }
+  }
+
+  async function clearSaveTarget() {
+    if (!saveTargetMemberId) return
+    try {
+      await api.clearMemberSaveTarget(saveTargetMemberId, year, month)
+      setSheet(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao limpar previsão para guardar')
     }
   }
 
@@ -1528,6 +1579,10 @@ export default function App() {
       return 'Nova conta'
     }
     if (sheet === 'member') return editingMemberId ? 'Editar pessoa' : 'Nova pessoa'
+    if (sheet === 'save-target') {
+      const name = saveTargetMember?.member_name
+      return name ? `Guardar · ${name}` : 'Previsão para guardar'
+    }
     if (sheet === 'category') return editingCategoryId ? 'Editar categoria' : 'Nova categoria'
     if (sheet === 'goal') return editingGoalId ? 'Editar meta' : 'Nova meta'
     if (sheet === 'bill') return editingBillId ? 'Editar conta' : cardPurchaseMode ? 'Nova compra no cartão' : 'Nova conta'
@@ -2044,32 +2099,41 @@ export default function App() {
               <h2>Previsão para guardar</h2>
               <p className="meta" style={{ marginBottom: '0.85rem' }}>
                 {memberFilter === 'all'
-                  ? 'Quanto cada um deve guardar neste mês nas caixinhas.'
-                  : `Quanto ${selectedMemberForecast?.member_name ?? 'esta pessoa'} deve guardar neste mês.`}
+                  ? 'Quanto cada um quer guardar neste mês. Toque para definir, usando o que sobra na previsão.'
+                  : `Quanto ${selectedMemberForecast?.member_name ?? 'esta pessoa'} quer guardar neste mês, a partir do que sobra na previsão.`}
               </p>
-              {(forecast?.by_member ?? []).filter((item) =>
-                memberFilter === 'all' ? true : item.member_id === memberFilter,
-              ).filter((item) => !isCompanyMemberName(item.member_name)).length === 0 ? (
-                <p className="empty">Nenhuma meta cadastrada ainda.</p>
+              {homeSavePeople.length === 0 ? (
+                <p className="empty">Adicione alguém na família para definir quanto guardar.</p>
               ) : (
                 <div className="list">
-                  {(forecast?.by_member ?? [])
-                    .filter((item) => (memberFilter === 'all' ? true : item.member_id === memberFilter))
-                    .filter((item) => !isCompanyMemberName(item.member_name))
-                    .map((item) => (
-                      <article key={item.member_id} className="row">
-                        <div className="icon-wrap">
-                          <CategoryGlyph icon="investment" />
-                        </div>
-                        <div className="row-main">
-                          <h3>{item.member_name}</h3>
-                          <p>reservar nas metas do mês</p>
-                        </div>
-                        <div className={`amount ${item.savings_share > 0 ? 'expense' : 'income'}`}>
-                          {currency.format(item.savings_share)}
-                        </div>
-                      </article>
-                    ))}
+                  {homeSavePeople.map((item) => (
+                    <button
+                      key={item.member_id}
+                      type="button"
+                      className="row"
+                      onClick={() => openSaveTargetSheet(item)}
+                    >
+                      <div className="icon-wrap">
+                        <CategoryGlyph icon="investment" />
+                      </div>
+                      <div className="row-main">
+                        <h3>{item.member_name}</h3>
+                        <p>
+                          {item.savings_custom
+                            ? 'definido para este mês'
+                            : item.savings_share > 0
+                              ? 'sugerido pelas caixinhas'
+                              : 'toque para definir'}
+                          {item.save_capacity > 0
+                            ? ` · sobra ${currency.format(item.save_capacity)}`
+                            : ''}
+                        </p>
+                      </div>
+                      <div className={`amount ${item.savings_share > 0 ? 'expense' : 'income'}`}>
+                        {currency.format(item.savings_share)}
+                      </div>
+                    </button>
+                  ))}
                 </div>
               )}
             </section>
@@ -3155,6 +3219,59 @@ export default function App() {
                     }}
                   >
                     Excluir
+                  </button>
+                ) : null}
+              </form>
+            ) : sheet === 'save-target' ? (
+              <form className="form" onSubmit={submitSaveTarget}>
+                <div className="save-ref">
+                  <p>
+                    Sobra{' '}
+                    <strong className={(saveTargetMember?.save_capacity ?? 0) < 0 ? 'neg' : 'pos'}>
+                      {currency.format(saveTargetMember?.save_capacity ?? 0)}
+                    </strong>{' '}
+                    neste mês depois de contas e gastos.
+                  </p>
+                  {(saveTargetMember?.save_capacity ?? 0) <= 0 ? (
+                    <p>Não há folga na previsão para guardar agora.</p>
+                  ) : null}
+                </div>
+                <label>
+                  Quanto guardar
+                  <input
+                    required
+                    type="text"
+                    inputMode="decimal"
+                    value={saveTargetAmount}
+                    onChange={(e) => setSaveTargetAmount(e.target.value)}
+                    placeholder="0,00"
+                  />
+                </label>
+                {(saveTargetMember?.save_capacity ?? 0) > 0 ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() =>
+                      setSaveTargetAmount(
+                        String(Math.round((saveTargetMember?.save_capacity ?? 0) * 100) / 100),
+                      )
+                    }
+                  >
+                    Usar o que sobra
+                  </button>
+                ) : null}
+                <button className="primary" type="submit">
+                  Salvar
+                </button>
+                {saveTargetMember?.savings_custom ? (
+                  <button type="button" className="ghost" onClick={() => void clearSaveTarget()}>
+                    {savingsGoals.some(
+                      (goal) =>
+                        (goal.member_ids ?? []).includes(saveTargetMember.member_id) &&
+                        goalMonthlyPlan(goal) > 0,
+                    )
+                      ? 'Usar sugestão das caixinhas'
+                      : 'Limpar valor'}
                   </button>
                 ) : null}
               </form>

@@ -16,6 +16,8 @@ type MemberStore interface {
 	GetMemberByID(ctx context.Context, id int) (models.Member, error)
 	UpdateMember(ctx context.Context, id int, input models.UpdateMemberInput) (models.Member, error)
 	DeleteMember(ctx context.Context, id int) error
+	SetMemberSaveTarget(ctx context.Context, memberID, year, month int, amount float64) error
+	DeleteMemberSaveTarget(ctx context.Context, memberID, year, month int) error
 }
 
 // Members handles family member HTTP endpoints.
@@ -99,6 +101,60 @@ func (h *Members) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.DeleteMember(r.Context(), id); err != nil {
+		writeStoreError(w, err, "member not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetSaveTarget handles PUT /members/{id}/save-target.
+func (h *Members) SetSaveTarget(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePositiveID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+
+	var input models.SetMemberSaveTargetInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if input.Year < 1 {
+		http.Error(w, "invalid year", http.StatusBadRequest)
+		return
+	}
+	if input.Month < 1 || input.Month > 12 {
+		http.Error(w, "invalid month", http.StatusBadRequest)
+		return
+	}
+	if input.Amount < 0 {
+		http.Error(w, "amount must be >= 0", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.Store.SetMemberSaveTarget(r.Context(), id, input.Year, input.Month, input.Amount); err != nil {
+		writeStoreError(w, err, "member not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, models.MemberSaveTarget{
+		MemberID: id,
+		Year:     input.Year,
+		Month:    input.Month,
+		Amount:   input.Amount,
+	})
+}
+
+// ClearSaveTarget handles DELETE /members/{id}/save-target?year=&month=.
+func (h *Members) ClearSaveTarget(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePositiveID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	year, month, ok := parseYearMonth(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Store.DeleteMemberSaveTarget(r.Context(), id, year, month); err != nil {
 		writeStoreError(w, err, "member not found")
 		return
 	}

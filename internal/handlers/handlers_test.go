@@ -28,6 +28,7 @@ type memoryStore struct {
 	payments     map[string]models.BillPayment
 	goals        map[int]models.SavingsGoal
 	goalMonths   map[string]models.SavingsMonthAmount
+	saveTargets  map[string]models.MemberSaveTarget
 	wallets      map[int]models.Wallet
 	nextCatID    int
 	nextTxID     int
@@ -46,6 +47,7 @@ func newMemoryStore() *memoryStore {
 		payments:     make(map[string]models.BillPayment),
 		goals:        make(map[int]models.SavingsGoal),
 		goalMonths:   make(map[string]models.SavingsMonthAmount),
+		saveTargets:  make(map[string]models.MemberSaveTarget),
 		wallets:      make(map[int]models.Wallet),
 		nextCatID:    1,
 		nextTxID:     1,
@@ -173,6 +175,11 @@ func (m *memoryStore) DeleteMember(_ context.Context, id int) error {
 		return repository.ErrNotFound
 	}
 	delete(m.members, id)
+	for key, item := range m.saveTargets {
+		if item.MemberID == id {
+			delete(m.saveTargets, key)
+		}
+	}
 	return nil
 }
 
@@ -184,6 +191,47 @@ func (m *memoryStore) SumMonthlySalaries(_ context.Context) (float64, error) {
 		total += member.MonthlySalary
 	}
 	return total, nil
+}
+
+func saveTargetKey(memberID, year, month int) string {
+	return fmt.Sprintf("%d-%d-%d", memberID, year, month)
+}
+
+func (m *memoryStore) ListMemberSaveTargets(_ context.Context, year, month int) ([]models.MemberSaveTarget, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.MemberSaveTarget, 0)
+	for _, item := range m.saveTargets {
+		if item.Year == year && item.Month == month {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryStore) SetMemberSaveTarget(_ context.Context, memberID, year, month int, amount float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.members[memberID]; !ok {
+		return repository.ErrNotFound
+	}
+	m.saveTargets[saveTargetKey(memberID, year, month)] = models.MemberSaveTarget{
+		MemberID: memberID,
+		Year:     year,
+		Month:    month,
+		Amount:   amount,
+	}
+	return nil
+}
+
+func (m *memoryStore) DeleteMemberSaveTarget(_ context.Context, memberID, year, month int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.members[memberID]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(m.saveTargets, saveTargetKey(memberID, year, month))
+	return nil
 }
 
 func (m *memoryStore) CreateTransaction(_ context.Context, tx models.Transaction) (models.Transaction, error) {
@@ -1245,6 +1293,101 @@ func TestSavingsGoalsAndForecast(t *testing.T) {
 	savings.SetMonthAmount(clearRec, clearReq)
 	if clearRec.Code != http.StatusNoContent {
 		t.Fatalf("clear month status = %d body=%s", clearRec.Code, clearRec.Body.String())
+	}
+}
+
+func TestMemberSaveTargetOverridesForecast(t *testing.T) {
+	store := newMemoryStore()
+	members := &handlers.Members{Store: store}
+	savings := &handlers.Savings{Store: store, Members: store, CDI: stubCDI{rate: 14.15}}
+	forecast := &handlers.Forecast{Store: store}
+
+	createMember := httptest.NewRequest(http.MethodPost, "/members", strings.NewReader(
+		`{"name":"Nicolas","monthly_salary":5000}`,
+	))
+	createMemberRec := httptest.NewRecorder()
+	members.ListOrCreate(createMemberRec, createMember)
+	if createMemberRec.Code != http.StatusCreated {
+		t.Fatalf("create member status = %d", createMemberRec.Code)
+	}
+
+	createGoal := httptest.NewRequest(http.MethodPost, "/savings", strings.NewReader(
+		`{"name":"Viagem","end_kind":"amount","target_amount":8000,"member_ids":[1]}`,
+	))
+	createGoalRec := httptest.NewRecorder()
+	savings.ListOrCreate(createGoalRec, createGoal)
+	if createGoalRec.Code != http.StatusCreated {
+		t.Fatalf("create goal status = %d body=%s", createGoalRec.Code, createGoalRec.Body.String())
+	}
+	wantPlan := models.BuildSavingsPlan(8000, 0, 14.15, 12, 1, true)
+
+	setReq := httptest.NewRequest(http.MethodPut, "/members/1/save-target", strings.NewReader(
+		`{"year":2026,"month":8,"amount":1200}`,
+	))
+	setReq.SetPathValue("id", "1")
+	setRec := httptest.NewRecorder()
+	members.SetSaveTarget(setRec, setReq)
+	if setRec.Code != http.StatusOK {
+		t.Fatalf("set save target status = %d body=%s", setRec.Code, setRec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/forecast/monthly?year=2026&month=8", nil)
+	rec := httptest.NewRecorder()
+	forecast.Monthly(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forecast status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body models.MonthlyForecast
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PlannedSavings != 1200 {
+		t.Fatalf("planned_savings = %v, want 1200", body.PlannedSavings)
+	}
+	if body.Remaining != 3800 {
+		t.Fatalf("remaining = %v, want 3800", body.Remaining)
+	}
+	if len(body.ByMember) != 1 {
+		t.Fatalf("by_member len = %d, want 1", len(body.ByMember))
+	}
+	mf := body.ByMember[0]
+	if mf.SavingsShare != 1200 || !mf.SavingsCustom {
+		t.Fatalf("savings = %+v", mf)
+	}
+	if mf.SaveCapacity != 5000 {
+		t.Fatalf("save_capacity = %v, want 5000", mf.SaveCapacity)
+	}
+	if wantPlan.MonthlyAmount <= 0 {
+		t.Fatalf("goal monthly plan = %v, want > 0", wantPlan.MonthlyAmount)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodDelete, "/members/1/save-target?year=2026&month=8", nil)
+	clearReq.SetPathValue("id", "1")
+	clearRec := httptest.NewRecorder()
+	members.ClearSaveTarget(clearRec, clearReq)
+	if clearRec.Code != http.StatusNoContent {
+		t.Fatalf("clear save target status = %d body=%s", clearRec.Code, clearRec.Body.String())
+	}
+
+	afterReq := httptest.NewRequest(http.MethodGet, "/forecast/monthly?year=2026&month=8", nil)
+	afterRec := httptest.NewRecorder()
+	forecast.Monthly(afterRec, afterReq)
+	var after models.MonthlyForecast
+	if err := json.NewDecoder(afterRec.Body).Decode(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after.PlannedSavings != wantPlan.MonthlyAmount || after.ByMember[0].SavingsCustom {
+		t.Fatalf("after clear = %+v, want goal plan %v", after.ByMember, wantPlan.MonthlyAmount)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodPut, "/members/99/save-target", strings.NewReader(
+		`{"year":2026,"month":8,"amount":100}`,
+	))
+	missingReq.SetPathValue("id", "99")
+	missingRec := httptest.NewRecorder()
+	members.SetSaveTarget(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing member status = %d, want 404", missingRec.Code)
 	}
 }
 

@@ -29,6 +29,8 @@ type MemberForecast struct {
 	TotalAvailable  float64 `json:"total_available"`
 	BillShare       float64 `json:"bill_share"`
 	SavingsShare    float64 `json:"savings_share"`
+	SavingsCustom   bool    `json:"savings_custom"`
+	SaveCapacity    float64 `json:"save_capacity"`
 	VariableExpense float64 `json:"variable_expense"`
 	TotalToPay      float64 `json:"total_to_pay"`
 	Remaining       float64 `json:"remaining"`

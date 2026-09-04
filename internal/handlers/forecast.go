@@ -16,6 +16,7 @@ type ForecastStore interface {
 	ListTransactionsByMonth(ctx context.Context, year, month int) ([]models.Transaction, error)
 	ListBillsActiveInMonth(ctx context.Context, year, month int) ([]models.Bill, error)
 	ListSavingsGoals(ctx context.Context) ([]models.SavingsGoal, error)
+	ListMemberSaveTargets(ctx context.Context, year, month int) ([]models.MemberSaveTarget, error)
 }
 
 // Forecast handles budget forecast endpoints.
@@ -54,7 +55,13 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var plannedSalary, extraIncome, variableExpense, plannedBills, plannedSavings float64
+	saveTargets, err := h.Store.ListMemberSaveTargets(r.Context(), year, month)
+	if err != nil {
+		writeStoreError(w, err, "not found")
+		return
+	}
+
+	var plannedSalary, extraIncome, variableExpense, plannedBills float64
 	for _, member := range members {
 		plannedSalary += member.MonthlySalary
 	}
@@ -74,9 +81,6 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, bill := range bills {
 		plannedBills += bill.ChargeForMonth(year, month)
-	}
-	for _, goal := range goals {
-		plannedSavings += goal.MonthlyPlan(year, month)
 	}
 
 	now := time.Now().UTC()
@@ -99,6 +103,11 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 
 	totalAvailable := plannedSalary + extraIncome
 	totalExpense := variableExpense + plannedBills
+	byMember := buildMemberForecasts(members, transactions, bills, goals, saveTargets, year, month, coveredTx)
+	var plannedSavings float64
+	for _, item := range byMember {
+		plannedSavings += item.SavingsShare
+	}
 	remaining := totalAvailable - totalExpense - plannedSavings
 
 	projectedVariable := variableExpense
@@ -136,7 +145,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		ProjectedExpense: round2(projectedExpense),
 		SafeDailySpend:   round2(safeDaily),
 		ExpensePaceRatio: round2(pace),
-		ByMember:         buildMemberForecasts(members, transactions, bills, goals, year, month, coveredTx),
+		ByMember:         byMember,
 	})
 }
 
@@ -145,12 +154,18 @@ func buildMemberForecasts(
 	transactions []models.Transaction,
 	bills []models.Bill,
 	goals []models.SavingsGoal,
+	saveTargets []models.MemberSaveTarget,
 	year, month int,
 	coveredTx map[int]bool,
 ) []models.MemberForecast {
+	customByMember := make(map[int]float64, len(saveTargets))
+	for _, target := range saveTargets {
+		customByMember[target.MemberID] = target.Amount
+	}
+
 	out := make([]models.MemberForecast, 0, len(members))
 	for _, member := range members {
-		var extraIncome, variableExpense, billShare, savingsShare float64
+		var extraIncome, variableExpense, billShare, goalShare float64
 		for _, tx := range transactions {
 			if tx.MemberID == nil || *tx.MemberID != member.ID {
 				continue
@@ -170,11 +185,19 @@ func buildMemberForecasts(
 			billShare += share
 		}
 		for _, goal := range goals {
-			savingsShare += savingsShareForMember(goal, member.ID, year, month)
+			goalShare += savingsShareForMember(goal, member.ID, year, month)
+		}
+
+		savingsShare := goalShare
+		savingsCustom := false
+		if amount, ok := customByMember[member.ID]; ok {
+			savingsShare = amount
+			savingsCustom = true
 		}
 
 		available := member.MonthlySalary + extraIncome
 		toPay := billShare + variableExpense
+		saveCapacity := available - toPay
 		out = append(out, models.MemberForecast{
 			MemberID:        member.ID,
 			MemberName:      member.Name,
@@ -183,6 +206,8 @@ func buildMemberForecasts(
 			TotalAvailable:  round2(available),
 			BillShare:       round2(billShare),
 			SavingsShare:    round2(savingsShare),
+			SavingsCustom:   savingsCustom,
+			SaveCapacity:    round2(saveCapacity),
 			VariableExpense: round2(variableExpense),
 			TotalToPay:      round2(toPay),
 			Remaining:       round2(available - toPay - savingsShare),
