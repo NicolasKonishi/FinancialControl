@@ -117,7 +117,7 @@ export function StatementImport({
   const memberWallets = useMemo(() => {
     return wallets
       .filter((wallet) => (creditMode ? isCredit(wallet) : !isCredit(wallet) && wallet.kind !== 'savings'))
-      .filter((wallet) => wallet.member_id == null || wallet.member_id === memberId || wallet.kind === 'company')
+      .filter((wallet) => wallet.member_id == null || wallet.member_id === memberId)
       .sort((a, b) => walletRank(a) - walletRank(b) || a.name.localeCompare(b.name))
   }, [wallets, memberId, creditMode])
 
@@ -143,7 +143,7 @@ export function StatementImport({
     return wallets
       .filter((wallet) => (creditMode ? isCredit(wallet) : !isCredit(wallet) && wallet.kind !== 'savings'))
       .filter(
-        (wallet) => wallet.member_id == null || wallet.member_id === nextMember || wallet.kind === 'company',
+        (wallet) => wallet.member_id == null || wallet.member_id === nextMember,
       )
       .sort((a, b) => walletRank(a) - walletRank(b) || a.name.localeCompare(b.name))
   }

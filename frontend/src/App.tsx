@@ -15,6 +15,7 @@ import {
   SavingsNavIcon,
   SettingsNavIcon,
   StatsNavIcon,
+  ThemeGlyph,
   TrashIcon,
 } from './icons'
 import { applyTheme, getPreferredTheme, persistTheme, type Theme } from './theme'
@@ -211,6 +212,32 @@ function isCompanyWallet(wallet: Wallet) {
   return wallet.kind === 'company'
 }
 
+function memberCompanyWallets(wallets: Wallet[], memberId: number) {
+  return wallets.filter((wallet) => isCompanyWallet(wallet) && wallet.member_id === memberId)
+}
+
+function memberCashTotal(wallets: Wallet[], memberId: number) {
+  return wallets
+    .filter(
+      (wallet) =>
+        wallet.member_id === memberId &&
+        wallet.kind !== 'savings' &&
+        !isCreditWallet(wallet),
+    )
+    .reduce((sum, wallet) => sum + wallet.balance, 0)
+}
+
+function jointCashTotal(wallets: Wallet[]) {
+  return wallets
+    .filter(
+      (wallet) =>
+        wallet.member_id == null &&
+        wallet.kind !== 'savings' &&
+        !isCreditWallet(wallet),
+    )
+    .reduce((sum, wallet) => sum + wallet.balance, 0)
+}
+
 function creditAvailable(wallet: Wallet) {
   return (wallet.credit_limit ?? 0) - (wallet.invoice_balance ?? 0)
 }
@@ -225,8 +252,7 @@ function walletSpendLabel(wallet: Wallet) {
 
 function payWalletsForMember(wallets: Wallet[], memberId: number) {
   const own = wallets.filter(
-    (wallet) =>
-      wallet.kind !== 'savings' && (wallet.member_id === memberId || isCompanyWallet(wallet)),
+    (wallet) => wallet.kind !== 'savings' && wallet.member_id === memberId,
   )
   const cash = own.filter((wallet) => wallet.kind !== 'benefit')
   return cash.length > 0 ? cash : own
@@ -237,7 +263,7 @@ function spendWalletsForMember(wallets: Wallet[], memberId: number, forIncome = 
     .filter((wallet) => {
       if (wallet.kind === 'savings') return false
       if (forIncome && isCreditWallet(wallet)) return false
-      return wallet.member_id === memberId || isCompanyWallet(wallet)
+      return wallet.member_id === memberId
     })
     .sort((a, b) => walletKindOrder(a.kind) - walletKindOrder(b.kind) || a.name.localeCompare(b.name))
 }
@@ -248,7 +274,7 @@ function invoicePayWallets(wallets: Wallet[], memberId: number) {
       (wallet) =>
         !isCreditWallet(wallet) &&
         wallet.kind !== 'savings' &&
-        (wallet.member_id === memberId || isCompanyWallet(wallet)),
+        wallet.member_id === memberId,
     )
     .sort((a, b) => walletKindOrder(a.kind) - walletKindOrder(b.kind) || a.name.localeCompare(b.name))
 }
@@ -442,10 +468,6 @@ export default function App() {
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
   const personMembers = useMemo(
     () => members.filter((member) => !isCompanyMemberName(member.name)),
-    [members],
-  )
-  const companyMember = useMemo(
-    () => members.find((member) => isCompanyMemberName(member.name)) ?? null,
     [members],
   )
   const activeMember = useMemo(
@@ -717,6 +739,17 @@ export default function App() {
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 899px)')
+    const leaveDesktopOnlyViews = () => {
+      if (!mq.matches) return
+      setView((current) => (current === 'savings' || current === 'statistics' ? 'home' : current))
+    }
+    leaveDesktopOnlyViews()
+    mq.addEventListener('change', leaveDesktopOnlyViews)
+    return () => mq.removeEventListener('change', leaveDesktopOnlyViews)
+  }, [])
 
   useEffect(() => {
     void refresh()
@@ -1429,24 +1462,14 @@ export default function App() {
   function openPayBill(bill: Bill) {
     const assigned = bill.member_ids ?? []
     const assignedWallet = billWallet(wallets, bill)
-    const companyPayer =
-      companyMember && assigned.length === 1 && assigned[0] === companyMember.id
-        ? companyMember.id
-        : 0
     const preferred =
       assignedWallet?.member_id ||
-      companyPayer ||
       defaultMemberId(assigned[0] ?? members[0]?.id ?? 0)
     const options = payWalletsForMember(wallets, preferred)
-    const companyFirst = options.find((wallet) => isCompanyWallet(wallet))
     setPayingBill(bill)
     setPayForm({
       member_id: preferred,
-      wallet_id:
-        assignedWallet?.id ??
-        (companyPayer ? companyFirst?.id : options[0]?.id) ??
-        options[0]?.id ??
-        0,
+      wallet_id: assignedWallet?.id ?? options[0]?.id ?? 0,
     })
     setSheet('pay-bill')
   }
@@ -1547,10 +1570,8 @@ export default function App() {
   const billSplitFamily =
     personMembers.length > 1 &&
     personMembers.every((member) => billForm.member_ids.includes(member.id))
-  const billPaidByCompany =
-    companyMember != null &&
-    billForm.member_ids.length === 1 &&
-    billForm.member_ids[0] === companyMember.id
+  const ownCompanyWallets = memberCompanyWallets(wallets, defaultMemberId())
+  const billPaidByCompany = ownCompanyWallets.some((wallet) => wallet.id === billForm.wallet_id)
   const cardPurchaseInstallment = cardPurchaseMode
     ? installmentFromDescription(billForm.name)
     : null
@@ -1831,7 +1852,7 @@ export default function App() {
       <div className="app">
       <div className="app-main">
       <header className="top">
-        <div>
+        <div className="top-brand">
           <h1>Fluxo</h1>
           <p>{activeMember ? `Conta de ${activeMember.name}` : 'Família · contas · gastos'}</p>
         </div>
@@ -1852,34 +1873,25 @@ export default function App() {
           ) : null}
           <button
             type="button"
-            className="theme-toggle"
+            className="theme-toggle theme-toggle--header"
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
             title={theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
           >
-            {theme === 'dark' ? (
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5Z" />
-              </svg>
-            )}
+            <ThemeGlyph variant={theme === 'dark' ? 'sun' : 'moon'} />
           </button>
-          {!isConfigView && (
-            <div className="month-switch">
-              <button type="button" aria-label="Mês anterior" onClick={() => shiftMonth(-1)}>
-                ‹
-              </button>
-              <span>{monthLabel.format(new Date(year, month - 1, 1))}</span>
-              <button type="button" aria-label="Próximo mês" onClick={() => shiftMonth(1)}>
-                ›
-              </button>
-            </div>
-          )}
         </div>
+        {!isConfigView && (
+          <div className="month-switch">
+            <button type="button" aria-label="Mês anterior" onClick={() => shiftMonth(-1)}>
+              ‹
+            </button>
+            <span>{monthLabel.format(new Date(year, month - 1, 1))}</span>
+            <button type="button" aria-label="Próximo mês" onClick={() => shiftMonth(1)}>
+              ›
+            </button>
+          </div>
+        )}
       </header>
 
       {error && !quickLaunch ? <div className="error">{error}</div> : null}
@@ -1957,40 +1969,78 @@ export default function App() {
               </p>
               <p className="meta">
                 {memberFilter === 'all'
-                  ? 'conjunto da família — escolha alguém acima para ver só o individual'
-                  : 'desta pessoa, incluindo o que é conjunto'}
+                  ? 'incluindo subcontas — toque para ver as contas'
+                  : memberCompanyWallets(wallets, memberFilter).length > 0
+                    ? 'desta pessoa, incluindo a conta da empresa'
+                    : 'desta pessoa, incluindo o que é conjunto'}
               </p>
               {memberFilter === 'all' ? (
                 <div className="list" style={{ marginTop: '0.85rem' }}>
                   {personMembers.map((member) => {
-                    const total = wallets
-                      .filter(
-                        (wallet) =>
-                          wallet.member_id === member.id &&
-                          wallet.kind !== 'savings' &&
-                          !isCreditWallet(wallet),
-                      )
-                      .reduce((sum, wallet) => sum + wallet.balance, 0)
+                    const total = memberCashTotal(wallets, member.id)
+                    const companyAccounts = memberCompanyWallets(wallets, member.id)
                     return (
-                      <button
-                        key={member.id}
-                        type="button"
-                        className="row"
-                        onClick={() => setMemberFilter(member.id)}
-                      >
+                      <div key={member.id} className="saldo-person">
+                        <button
+                          type="button"
+                          className="row"
+                          onClick={() => setMemberFilter(member.id)}
+                        >
+                          <div className="icon-wrap">
+                            <CategoryGlyph icon="salary" />
+                          </div>
+                          <div className="row-main">
+                            <h3>{member.name}</h3>
+                            <p>
+                              {companyAccounts.length > 0
+                                ? 'saldo individual, com a empresa'
+                                : 'saldo individual'}
+                            </p>
+                          </div>
+                          <div className={`amount ${total < 0 ? 'expense' : 'income'}`}>
+                            {currency.format(total)}
+                          </div>
+                        </button>
+                        {companyAccounts.map((wallet) => (
+                          <button
+                            key={wallet.id}
+                            type="button"
+                            className="row saldo-sub"
+                            onClick={() => openWalletSheet(wallet)}
+                          >
+                            <div className="icon-wrap">
+                              <CategoryGlyph icon="freelance" />
+                            </div>
+                            <div className="row-main">
+                              <h3>{wallet.name}</h3>
+                              <p>subconta · {member.name}</p>
+                            </div>
+                            <div className={`amount ${wallet.balance < 0 ? 'expense' : 'income'}`}>
+                              {currency.format(wallet.balance)}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  })}
+                  {(() => {
+                    const total = jointCashTotal(wallets)
+                    if (total === 0) return null
+                    return (
+                      <article className="row">
                         <div className="icon-wrap">
                           <CategoryGlyph icon="salary" />
                         </div>
                         <div className="row-main">
-                          <h3>{member.name}</h3>
-                          <p>saldo individual</p>
+                          <h3>Conjunto</h3>
+                          <p>contas da família</p>
                         </div>
                         <div className={`amount ${total < 0 ? 'expense' : 'income'}`}>
                           {currency.format(total)}
                         </div>
-                      </button>
+                      </article>
                     )
-                  })}
+                  })()}
                 </div>
               ) : cashWallets.length === 0 && creditWallets.length === 0 ? (
                 <p className="empty" style={{ marginTop: '0.85rem' }}>
@@ -2302,12 +2352,29 @@ export default function App() {
                     const wallet = billWallet(wallets, bill)
                     return !wallet || !isCreditWallet(wallet)
                   }
+                  const fromCompany = (bill: Bill) => {
+                    const wallet = billWallet(wallets, bill)
+                    return Boolean(wallet && isCompanyWallet(wallet))
+                  }
                   const cashBills = listedBills.filter(isCashBill)
                   const renderCashGroups = () => {
                     if (memberFilter !== 'all') {
-                      return cashBills.length > 0 ? (
-                        <div className="list">{cashBills.map((bill) => renderBillRow(bill))}</div>
-                      ) : null
+                      const personal = cashBills.filter((bill) => !fromCompany(bill))
+                      const company = cashBills.filter(fromCompany)
+                      if (personal.length === 0 && company.length === 0) return null
+                      return (
+                        <>
+                          {personal.length > 0 ? (
+                            <div className="list">{personal.map((bill) => renderBillRow(bill))}</div>
+                          ) : null}
+                          {company.length > 0 ? (
+                            <>
+                              <p className="section-label">Empresa</p>
+                              <div className="list">{company.map((bill) => renderBillRow(bill))}</div>
+                            </>
+                          ) : null}
+                        </>
+                      )
                     }
                     return (
                       <>
@@ -2321,26 +2388,26 @@ export default function App() {
                         ) : null}
                         {personMembers.map((member) => {
                           const items = (billsByGroup.byMember.get(member.id) ?? []).filter(isCashBill)
-                          if (items.length === 0) return null
+                          const personal = items.filter((bill) => !fromCompany(bill))
+                          const company = items.filter(fromCompany)
+                          if (personal.length === 0 && company.length === 0) return null
                           return (
                             <div key={member.id}>
-                              <p className="section-label">{member.name} · à vista</p>
-                              <div className="list">{items.map((bill) => renderBillRow(bill))}</div>
+                              {personal.length > 0 ? (
+                                <>
+                                  <p className="section-label">{member.name} · à vista</p>
+                                  <div className="list">{personal.map((bill) => renderBillRow(bill))}</div>
+                                </>
+                              ) : null}
+                              {company.length > 0 ? (
+                                <>
+                                  <p className="section-label">{member.name} · empresa</p>
+                                  <div className="list">{company.map((bill) => renderBillRow(bill))}</div>
+                                </>
+                              ) : null}
                             </div>
                           )
                         })}
-                        {companyMember ? (
-                          (billsByGroup.byMember.get(companyMember.id) ?? []).filter(isCashBill).length > 0 ? (
-                            <div>
-                              <p className="section-label">Empresa</p>
-                              <div className="list">
-                                {(billsByGroup.byMember.get(companyMember.id) ?? [])
-                                  .filter(isCashBill)
-                                  .map((bill) => renderBillRow(bill))}
-                              </div>
-                            </div>
-                          ) : null
-                        ) : null}
                       </>
                     )
                   }
@@ -2654,11 +2721,11 @@ export default function App() {
               <div className="row-main">
                 <h3>Família</h3>
                 <p>
-                  {members.length === 0
+                  {personMembers.length === 0
                     ? 'Adicione quem mora / contribui e os benefícios de cada um'
-                    : members.length === 1
+                    : personMembers.length === 1
                       ? '1 pessoa'
-                      : `${members.length} pessoas`}
+                      : `${personMembers.length} pessoas`}
                 </p>
               </div>
               <span className="settings-chevron" aria-hidden>
@@ -2699,6 +2766,23 @@ export default function App() {
                 ›
               </span>
             </button>
+            <button
+              type="button"
+              className="row settings-item"
+              onClick={toggleTheme}
+              aria-label={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+            >
+              <div className="icon-wrap">
+                <ThemeGlyph className="glyph" variant={theme === 'dark' ? 'sun' : 'moon'} />
+              </div>
+              <div className="row-main">
+                <h3>Aparência</h3>
+                <p>{theme === 'dark' ? 'Modo escuro · toque para claro' : 'Modo claro · toque para escuro'}</p>
+              </div>
+              <span className="theme-toggle" aria-hidden>
+                <ThemeGlyph variant={theme === 'dark' ? 'sun' : 'moon'} />
+              </span>
+            </button>
           </div>
         </section>
       )}
@@ -2720,11 +2804,11 @@ export default function App() {
           <p className="meta" style={{ marginBottom: '0.85rem' }}>
             Salário mensal entra na previsão. Vales viram formas de pagar. Cartões e conta da empresa ficam em Contas e cartões.
           </p>
-          {members.length === 0 ? (
+          {personMembers.length === 0 ? (
             <p className="empty">Adicione quem mora / contribui em casa.</p>
           ) : (
             <div className="list">
-              {members.map((member) => (
+              {personMembers.map((member) => (
                 <article key={member.id} className="row">
                   <div className="icon-wrap">
                     <CategoryGlyph icon="salary" />
@@ -2801,21 +2885,20 @@ export default function App() {
           </div>
           <p className="meta" style={{ marginBottom: '0.85rem' }}>
             Cada pessoa tem as contas do banco e os cartões. A fatura do cartão sobe nos gastos e pode ser paga no mês.
-            Contabilidade e Simples Nacional saem da conta da empresa.
+            A conta da empresa fica na pessoa dona, como subconta para pagar e guardar.
           </p>
-          {members.length === 0 ? (
+          {personMembers.length === 0 ? (
             <p className="empty">Cadastre a família primeiro.</p>
           ) : (
-            members.map((member) => {
+            personMembers.map((member) => {
               const own = wallets.filter((wallet) => wallet.member_id === member.id)
               const cards = own.filter((wallet) => isCreditWallet(wallet))
               const accounts = own.filter(
                 (wallet) => !isCreditWallet(wallet) && wallet.kind !== 'savings',
               )
-              const company = isCompanyMemberName(member.name)
               return (
                 <div key={member.id} className="account-group">
-                  <p className="section-label">{company ? 'Empresa' : member.name}</p>
+                  <p className="section-label">{member.name}</p>
                   {accounts.length === 0 && cards.length === 0 ? (
                     <p className="empty">Nenhuma conta ainda.</p>
                   ) : (
@@ -2877,32 +2960,27 @@ export default function App() {
                     </div>
                   )}
                   <div className="account-group-actions">
-                    {company ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => openNewWallet('company', member.id)}
-                      >
-                        Nova conta da empresa
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => openNewWallet('checking', member.id)}
-                        >
-                          Nova conta
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => openNewWallet('credit', member.id)}
-                        >
-                          Novo cartão
-                        </button>
-                      </>
-                    )}
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openNewWallet('checking', member.id)}
+                    >
+                      Nova conta
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openNewWallet('credit', member.id)}
+                    >
+                      Novo cartão
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => openNewWallet('company', member.id)}
+                    >
+                      Nova conta da empresa
+                    </button>
                   </div>
                 </div>
               )
@@ -3008,7 +3086,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={view === 'savings' ? 'active' : ''}
+          className={`nav-hide-mobile${view === 'savings' ? ' active' : ''}`}
           onClick={() => {
             setSelectedGoalId(null)
             setView('savings')
@@ -3025,7 +3103,11 @@ export default function App() {
           <ImportNavIcon />
           Extrato
         </button>
-        <button type="button" className={view === 'statistics' ? 'active' : ''} onClick={() => setView('statistics')}>
+        <button
+          type="button"
+          className={`nav-hide-mobile${view === 'statistics' ? ' active' : ''}`}
+          onClick={() => setView('statistics')}
+        >
           <StatsNavIcon />
           Estatísticas
         </button>
@@ -3220,7 +3302,7 @@ export default function App() {
                     }
                   >
                     <option value="joint">Família (conjunto)</option>
-                    {members.map((member) => (
+                    {personMembers.map((member) => (
                       <option key={member.id} value={member.id}>
                         {member.name}
                       </option>
@@ -3827,11 +3909,9 @@ export default function App() {
                             ...p,
                             wallet_id,
                             member_ids: wallet
-                              ? isCompanyWallet(wallet) && companyMember
-                                ? [companyMember.id]
-                                : wallet.member_id
-                                  ? [wallet.member_id]
-                                  : p.member_ids
+                              ? wallet.member_id
+                                ? [wallet.member_id]
+                                : p.member_ids
                               : defaultMemberId()
                                 ? [defaultMemberId()]
                                 : p.member_ids,
@@ -3886,19 +3966,21 @@ export default function App() {
                           {activeMember?.name ?? 'Você'}
                         </p>
                       )}
-                      {companyMember ? (
+                      {ownCompanyWallets.length > 0 ? (
                         <label className="split-toggle">
                           <input
                             type="checkbox"
                             checked={billPaidByCompany}
                             onChange={() => {
+                              const company = ownCompanyWallets[0]
                               setBillForm((prev) => ({
                                 ...prev,
-                                member_ids: billPaidByCompany
-                                  ? defaultMemberId()
+                                wallet_id: billPaidByCompany ? 0 : company.id,
+                                member_ids: company.member_id
+                                  ? [company.member_id]
+                                  : defaultMemberId()
                                     ? [defaultMemberId()]
-                                    : []
-                                  : [companyMember.id],
+                                    : prev.member_ids,
                               }))
                             }}
                           />

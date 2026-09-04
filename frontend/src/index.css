@@ -92,11 +92,21 @@ button {
 }
 
 .top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.45rem;
   margin-bottom: 1rem;
+}
+
+.top-brand {
+  display: none;
+}
+
+.top-controls {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .top h1 {
@@ -115,8 +125,8 @@ button {
 
 .top-controls {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
   gap: 0.45rem;
 }
 
@@ -131,6 +141,7 @@ button {
   display: grid;
   place-items: center;
   box-shadow: var(--shadow);
+  flex-shrink: 0;
 }
 
 .theme-toggle svg {
@@ -138,10 +149,19 @@ button {
   height: 18px;
 }
 
+.theme-toggle--header {
+  display: none;
+}
+
 .month-switch {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.35rem;
+  justify-self: start;
+  min-width: 0;
 }
 
 .month-switch button {
@@ -1266,6 +1286,15 @@ button.row {
   gap: 0.55rem;
 }
 
+.saldo-person {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.saldo-sub {
+  margin-left: 0.85rem;
+}
+
 .row {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -1886,6 +1915,10 @@ select {
   font-weight: 650;
 }
 
+.bottom-nav .nav-hide-mobile {
+  display: none;
+}
+
 .sheet {
   position: fixed;
   inset: 0;
@@ -2056,8 +2089,21 @@ select {
   }
 
   .top {
+    display: flex;
     align-items: center;
+    justify-content: flex-start;
     margin-bottom: 1.15rem;
+  }
+
+  .top-brand {
+    display: block;
+    min-width: 0;
+    margin-right: auto;
+  }
+
+  .top-controls {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .top h1 {
@@ -2068,6 +2114,21 @@ select {
     flex-direction: row;
     align-items: center;
     gap: 0.65rem;
+  }
+
+  .theme-toggle--header {
+    display: grid;
+  }
+
+  .month-switch {
+    grid-column: auto;
+    grid-row: auto;
+    justify-self: auto;
+    justify-content: center;
+  }
+
+  .bottom-nav .nav-hide-mobile {
+    display: flex;
   }
 
   .hero-value {
