@@ -30,6 +30,7 @@ type memoryStore struct {
 	goalMonths   map[string]models.SavingsMonthAmount
 	saveTargets  map[string]models.MemberSaveTarget
 	wallets      map[int]models.Wallet
+	imports      []models.StatementImport
 	nextCatID    int
 	nextTxID     int
 	nextMemberID int
@@ -49,6 +50,7 @@ func newMemoryStore() *memoryStore {
 		goalMonths:   make(map[string]models.SavingsMonthAmount),
 		saveTargets:  make(map[string]models.MemberSaveTarget),
 		wallets:      make(map[int]models.Wallet),
+		imports:      make([]models.StatementImport, 0),
 		nextCatID:    1,
 		nextTxID:     1,
 		nextMemberID: 1,
@@ -757,6 +759,45 @@ func (m *memoryStore) ReconcileCardInvoice(
 		StatementPeriodEnd:   periodEnd,
 		StatementBalance:     &amount,
 	}), nil
+}
+
+func (m *memoryStore) FindStatementImportByHash(_ context.Context, walletID int, fileSHA256 string) (models.StatementImport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range m.imports {
+		if item.WalletID == walletID && item.FileSHA256 == fileSHA256 {
+			return item, nil
+		}
+	}
+	return models.StatementImport{}, repository.ErrNotFound
+}
+
+func (m *memoryStore) FindStatementImportByMonth(_ context.Context, walletID int, statementType string, year, month int) (models.StatementImport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range m.imports {
+		if item.WalletID == walletID && item.StatementType == statementType && item.Year == year && item.Month == month {
+			return item, nil
+		}
+	}
+	return models.StatementImport{}, repository.ErrNotFound
+}
+
+func (m *memoryStore) CreateStatementImport(_ context.Context, item models.StatementImport) (models.StatementImport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.imports {
+		if existing.WalletID == item.WalletID && existing.FileSHA256 == item.FileSHA256 {
+			return models.StatementImport{}, repository.DuplicateStatementError{Message: "já importado"}
+		}
+		if existing.WalletID == item.WalletID && existing.StatementType == item.StatementType && existing.Year == item.Year && existing.Month == item.Month {
+			return models.StatementImport{}, repository.DuplicateStatementError{Message: "já importado"}
+		}
+	}
+	item.ID = len(m.imports) + 1
+	item.CreatedAt = time.Now().UTC()
+	m.imports = append(m.imports, item)
+	return item, nil
 }
 
 type stubCDI struct {
@@ -1744,6 +1785,100 @@ func TestDebitImportSkipsPlannedBill(t *testing.T) {
 		t.Fatalf("debit import should keep the original bill: %+v", bills)
 	}
 }
+
+func TestStatementPreviewRejectsWrongMode(t *testing.T) {
+	store := newMemoryStore()
+	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Outro", Icon: "other"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Nubank", Kind: models.WalletCredit, MemberID: &member.ID, ClosingDay: &closing, DueDay: &due,
+	})
+	h := &handlers.Statements{
+		Parser: fakeStatementParser{result: models.ParsedStatement{
+			Issuer: "nubank", StatementType: "account",
+			Items: []models.ParsedStatementItem{{Date: "2026-09-01", Description: "PADARIA", Amount: 10, Kind: "expense", SuggestedIcon: "other"}},
+		}},
+		Transactions: store, Categories: store, Members: store, Wallets: store, Imports: store,
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, _ := writer.CreateFormFile("file", "extrato.ofx")
+	_, _ = part.Write([]byte("OFX-fake"))
+	_ = writer.WriteField("wallet_id", fmt.Sprintf("%d", card.ID))
+	_ = writer.WriteField("expected_type", "credit_card")
+	_ = writer.WriteField("year", "2026")
+	_ = writer.WriteField("month", "9")
+	_ = writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/statements/preview", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.Preview(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "débito") {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStatementImportRejectsDuplicateDocument(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Outro", Icon: "other"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	checking, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Conta", Kind: models.WalletChecking, MemberID: &member.ID,
+	})
+	h := &handlers.Statements{
+		Parser: fakeStatementParser{result: models.ParsedStatement{
+			Issuer: "nubank", StatementType: "account", PeriodEnd: strPtr("2026-09-30"),
+			Items: []models.ParsedStatementItem{{Date: "2026-09-10", Description: "PADARIA", Amount: 18, Kind: "expense", SuggestedIcon: "other"}},
+		}},
+		Transactions: store, Categories: store, Members: store, Wallets: store, Bills: store, Imports: store,
+	}
+
+	previewFile := func() *httptest.ResponseRecorder {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+		part, _ := writer.CreateFormFile("file", "extrato.ofx")
+		_, _ = part.Write([]byte("same-ofx-bytes"))
+		_ = writer.WriteField("wallet_id", fmt.Sprintf("%d", checking.ID))
+		_ = writer.WriteField("expected_type", "account")
+		_ = writer.WriteField("year", "2026")
+		_ = writer.WriteField("month", "9")
+		_ = writer.Close()
+		req := httptest.NewRequest(http.MethodPost, "/statements/preview", &buf)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		rec := httptest.NewRecorder()
+		h.Preview(rec, req)
+		return rec
+	}
+
+	first := previewFile()
+	if first.Code != http.StatusOK {
+		t.Fatalf("first preview status = %d body=%s", first.Code, first.Body.String())
+	}
+	var preview models.StatementPreview
+	if err := json.NewDecoder(first.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(
+		`{"wallet_id":%d,"member_id":%d,"statement_type":"account","file_sha256":%q,"period_end":"2026-09-30","items":[{"date":"2026-09-10","description":"PADARIA","amount":18,"type":"expense","category_id":%d}]}`,
+		checking.ID, member.ID, preview.FileSHA256, category.ID,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Import(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	second := previewFile()
+	if second.Code != http.StatusConflict || !strings.Contains(second.Body.String(), "já foi importado") {
+		t.Fatalf("duplicate preview status = %d body=%s", second.Code, second.Body.String())
+	}
+}
+
+func strPtr(value string) *string { return &value }
 
 func TestStatementPreviewCSVWithoutParser(t *testing.T) {
 	store := newMemoryStore()

@@ -41,6 +41,10 @@ func writeStoreError(w http.ResponseWriter, err error, notFoundMessage string) {
 		http.Error(w, "invalid amount", http.StatusBadRequest)
 	case errors.Is(err, repository.ErrInvoiceEmpty):
 		http.Error(w, "invoice is already paid", http.StatusBadRequest)
+	case errors.Is(err, repository.ErrStatementTypeMismatch):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, repository.ErrStatementImported):
+		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		log.Printf("store error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

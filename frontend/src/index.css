@@ -1915,6 +1915,54 @@ select {
   width: min(36rem, 100%);
 }
 
+.import-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  margin: 0 0 1rem;
+}
+
+.import-modes button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 14px;
+  padding: 0.85rem 0.7rem;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.import-modes button strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.import-modes button span {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.import-modes button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+.invoice-components {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.2rem 0 0.55rem;
+}
+
+.invoice-components article {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.86rem;
+}
+
 .sheet-panel header {
   display: flex;
   justify-content: space-between;

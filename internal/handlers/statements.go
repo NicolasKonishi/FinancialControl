@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -44,6 +47,11 @@ type Statements struct {
 		ListBills(ctx context.Context) ([]models.Bill, error)
 		UpdateBill(ctx context.Context, id int, bill models.Bill) (models.Bill, error)
 	}
+	Imports interface {
+		FindStatementImportByHash(ctx context.Context, walletID int, fileSHA256 string) (models.StatementImport, error)
+		FindStatementImportByMonth(ctx context.Context, walletID int, statementType string, year, month int) (models.StatementImport, error)
+		CreateStatementImport(ctx context.Context, item models.StatementImport) (models.StatementImport, error)
+	}
 }
 
 // Preview handles POST /statements/preview.
@@ -55,6 +63,10 @@ func (h *Statements) Preview(w http.ResponseWriter, r *http.Request) {
 
 	parsed, ok := h.parseFile(w, r, file, year, month)
 	if !ok {
+		return
+	}
+	expectedType := strings.TrimSpace(r.FormValue("expected_type"))
+	if !h.statementTypeMatches(w, parsed.StatementType, expectedType) {
 		return
 	}
 	var destination *models.Wallet
@@ -91,6 +103,18 @@ func (h *Statements) Preview(w http.ResponseWriter, r *http.Request) {
 	if len(preview.Items) == 0 {
 		http.Error(w, "Não achei movimentações neste extrato. Tente o CSV ou o OFX da Nubank.", http.StatusBadRequest)
 		return
+	}
+	preview.FileSHA256 = hashStatementFile(file)
+	importYear, importMonth := competenceFromStatement(parsed, preview)
+	if importYear > 0 && importMonth > 0 {
+		preview.ImportYear = &importYear
+		preview.ImportMonth = &importMonth
+	}
+	if walletID != nil && h.Imports != nil && importYear > 0 && importMonth > 0 {
+		if err := h.rejectDuplicateStatement(r.Context(), *walletID, parsed.StatementType, preview.FileSHA256, importYear, importMonth); err != nil {
+			writeStoreError(w, err, "statement not found")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, preview)
 }
@@ -129,6 +153,14 @@ func (h *Statements) Import(w http.ResponseWriter, r *http.Request) {
 		}
 		if input.InvoiceYear == nil || input.InvoiceMonth == nil || *input.InvoiceYear < 2000 || *input.InvoiceMonth < 1 || *input.InvoiceMonth > 12 {
 			http.Error(w, "Competência da fatura inválida.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	importYear, importMonth := importCompetence(input)
+	if wallet != nil && h.Imports != nil && importYear > 0 && importMonth > 0 {
+		if err := h.rejectDuplicateStatement(r.Context(), wallet.ID, normalizeStatementType(input.StatementType), strings.ToLower(strings.TrimSpace(input.FileSHA256)), importYear, importMonth); err != nil {
+			writeStoreError(w, err, "statement not found")
 			return
 		}
 	}
@@ -229,6 +261,20 @@ func (h *Statements) Import(w http.ResponseWriter, r *http.Request) {
 			input.PeriodEnd,
 		); err != nil {
 			writeStoreError(w, err, "invoice not found")
+			return
+		}
+	}
+
+	if wallet != nil && h.Imports != nil && importYear > 0 && importMonth > 0 && strings.TrimSpace(input.FileSHA256) != "" {
+		if _, err := h.Imports.CreateStatementImport(r.Context(), models.StatementImport{
+			WalletID:      wallet.ID,
+			StatementType: normalizeStatementType(input.StatementType),
+			Year:          importYear,
+			Month:         importMonth,
+			FileSHA256:    strings.ToLower(strings.TrimSpace(input.FileSHA256)),
+			FileName:      strings.TrimSpace(input.FileName),
+		}); err != nil {
+			writeStoreError(w, err, "statement not found")
 			return
 		}
 	}
@@ -400,6 +446,121 @@ func (h *Statements) applyInvoicePreview(preview *models.StatementPreview, walle
 	preview.InvoiceMonth = &cycle.Month
 	preview.ClosingDate = &closing
 	preview.DueDate = &due
+}
+
+func (h *Statements) statementTypeMatches(w http.ResponseWriter, parsedType, expectedType string) bool {
+	expectedType = normalizeStatementType(expectedType)
+	if expectedType == "" {
+		return true
+	}
+	got := normalizeStatementType(parsedType)
+	if got == expectedType {
+		return true
+	}
+	if expectedType == "credit_card" {
+		http.Error(w, "Este arquivo é extrato de conta/débito. Use Cartão de débito.", http.StatusBadRequest)
+		return false
+	}
+	http.Error(w, "Este arquivo é fatura de cartão de crédito. Use Cartão de crédito.", http.StatusBadRequest)
+	return false
+}
+
+func (h *Statements) rejectDuplicateStatement(ctx context.Context, walletID int, statementType, fileSHA256 string, year, month int) error {
+	statementType = normalizeStatementType(statementType)
+	walletName := "esta conta"
+	if h.Wallets != nil {
+		if wallet, err := h.Wallets.GetWalletByID(ctx, walletID); err == nil {
+			walletName = wallet.Name
+		}
+	}
+	label := "extrato"
+	if statementType == "credit_card" {
+		label = "fatura"
+	}
+	if fileSHA256 != "" {
+		if previous, err := h.Imports.FindStatementImportByHash(ctx, walletID, fileSHA256); err == nil {
+			return repository.DuplicateStatementError{
+				Message: fmt.Sprintf("Este arquivo já foi importado para %s (%s %02d/%d).", walletName, label, previous.Month, previous.Year),
+			}
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return err
+		}
+	}
+	if previous, err := h.Imports.FindStatementImportByMonth(ctx, walletID, statementType, year, month); err == nil {
+		return repository.DuplicateStatementError{
+			Message: fmt.Sprintf("A %s de %02d/%d de %s já foi importada.", label, previous.Month, previous.Year, walletName),
+		}
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+func hashStatementFile(file []byte) string {
+	sum := sha256.Sum256(file)
+	return hex.EncodeToString(sum[:])
+}
+
+func normalizeStatementType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "credit_card":
+		return "credit_card"
+	case "account":
+		return "account"
+	default:
+		return ""
+	}
+}
+
+func competenceFromStatement(parsed models.ParsedStatement, preview models.StatementPreview) (int, int) {
+	if preview.InvoiceYear != nil && preview.InvoiceMonth != nil && *preview.InvoiceYear >= 2000 && *preview.InvoiceMonth >= 1 && *preview.InvoiceMonth <= 12 {
+		return *preview.InvoiceYear, *preview.InvoiceMonth
+	}
+	for _, src := range []*string{parsed.PeriodEnd, parsed.PeriodStart, preview.PeriodEnd, preview.PeriodStart} {
+		if year, month, ok := parseYearMonthDay(src); ok {
+			return year, month
+		}
+	}
+	for i := len(parsed.Items) - 1; i >= 0; i-- {
+		value := parsed.Items[i].Date
+		if year, month, ok := parseYearMonthDay(&value); ok {
+			return year, month
+		}
+	}
+	return 0, 0
+}
+
+func importCompetence(input models.ImportStatementInput) (int, int) {
+	if input.InvoiceYear != nil && input.InvoiceMonth != nil && *input.InvoiceYear >= 2000 && *input.InvoiceMonth >= 1 && *input.InvoiceMonth <= 12 {
+		return *input.InvoiceYear, *input.InvoiceMonth
+	}
+	for _, src := range []*string{input.PeriodEnd, input.PeriodStart} {
+		if year, month, ok := parseYearMonthDay(src); ok {
+			return year, month
+		}
+	}
+	if len(input.Items) > 0 {
+		value := input.Items[len(input.Items)-1].Date
+		if year, month, ok := parseYearMonthDay(&value); ok {
+			return year, month
+		}
+	}
+	return 0, 0
+}
+
+func parseYearMonthDay(value *string) (int, int, bool) {
+	if value == nil {
+		return 0, 0, false
+	}
+	day := strings.TrimSpace(*value)
+	if len(day) >= 10 {
+		day = day[:10]
+	}
+	parsed, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return 0, 0, false
+	}
+	return parsed.Year(), int(parsed.Month()), true
 }
 
 func (h *Statements) readUpload(w http.ResponseWriter, r *http.Request) ([]byte, int, int, *int, *int, bool) {

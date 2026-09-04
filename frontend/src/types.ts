@@ -216,6 +216,9 @@ export type StatementPreview = {
   due_date?: string | null
   wallet_id?: number | null
   member_id?: number | null
+  file_sha256?: string
+  import_year?: number | null
+  import_month?: number | null
   new_count: number
   matched_count: number
   skipped_count: number

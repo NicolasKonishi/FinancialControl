@@ -13,7 +13,10 @@ const dateLabel = new Intl.DateTimeFormat('pt-BR', {
   month: 'short',
 })
 
+export type StatementImportMode = 'credit' | 'debit'
+
 type Props = {
+  mode: StatementImportMode
   categories: Category[]
   members: Member[]
   wallets: Wallet[]
@@ -21,7 +24,6 @@ type Props = {
   defaultWalletId: number
   year: number
   month: number
-  onClose: () => void
   onImported: () => Promise<void>
 }
 
@@ -76,7 +78,12 @@ function importType(item: StatementPreviewItem): 'income' | 'expense' {
   return item.kind === 'income' || item.kind === 'refund' ? 'income' : 'expense'
 }
 
+function showImportAlert(message: string) {
+  window.alert(message)
+}
+
 export function StatementImport({
+  mode,
   categories,
   members,
   wallets,
@@ -84,10 +91,11 @@ export function StatementImport({
   defaultWalletId,
   year,
   month,
-  onClose,
   onImported,
 }: Props) {
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const creditMode = mode === 'credit'
+  const expectedType = creditMode ? 'credit_card' : 'account'
   const [memberId, setMemberId] = useState(defaultMemberId)
   const [walletId, setWalletId] = useState(defaultWalletId)
   const [file, setFile] = useState<File | null>(null)
@@ -104,15 +112,17 @@ export function StatementImport({
   const [periodStart, setPeriodStart] = useState<string | null>(null)
   const [periodEnd, setPeriodEnd] = useState<string | null>(null)
   const [dueDate, setDueDate] = useState<string | null>(null)
+  const [fileSha, setFileSha] = useState('')
 
   const memberWallets = useMemo(() => {
     return wallets
-      .filter((wallet) => wallet.kind !== 'savings')
+      .filter((wallet) => (creditMode ? isCredit(wallet) : !isCredit(wallet) && wallet.kind !== 'savings'))
       .filter((wallet) => wallet.member_id == null || wallet.member_id === memberId || wallet.kind === 'company')
       .sort((a, b) => walletRank(a) - walletRank(b) || a.name.localeCompare(b.name))
-  }, [wallets, memberId])
+  }, [wallets, memberId, creditMode])
 
-  const selectedWallet = memberWallets.find((wallet) => wallet.id === walletId) ?? null
+  const selectedWallet = memberWallets.find((wallet) => wallet.id === walletId) ?? memberWallets[0] ?? null
+  const selectedWalletId = selectedWallet?.id ?? 0
   const selected = (items ?? []).filter((item) => item.selected && isImportable(item))
   const selectedExpenses = selected.filter((item) => importType(item) === 'expense')
   const selectedIncome = selected.filter((item) => importType(item) === 'income')
@@ -126,10 +136,12 @@ export function StatementImport({
     .reduce((sum, item) => sum + item.amount, 0)
   const newCount = (items ?? []).filter((item) => isImportable(item) && !item.already_recorded).length
   const matchedCount = (items ?? []).filter((item) => item.already_recorded).length
+  const competenceYear = invoiceYear ?? year
+  const competenceMonth = invoiceMonth ?? month
 
   function walletsForMember(nextMember: number) {
     return wallets
-      .filter((wallet) => wallet.kind !== 'savings')
+      .filter((wallet) => (creditMode ? isCredit(wallet) : !isCredit(wallet) && wallet.kind !== 'savings'))
       .filter(
         (wallet) => wallet.member_id == null || wallet.member_id === nextMember || wallet.kind === 'company',
       )
@@ -141,31 +153,39 @@ export function StatementImport({
       setError('Escolha o CSV, OFX ou PDF do extrato.')
       return
     }
+    if (!selectedWalletId) {
+      setError(creditMode ? 'Escolha o cartão desta fatura.' : 'Escolha a conta deste extrato.')
+      return
+    }
     setBusy(true)
     setError('')
     try {
       const preview = await api.previewStatement(file, {
-        wallet_id: walletId || null,
+        wallet_id: selectedWalletId,
         member_id: memberId || null,
         year,
         month,
+        expected_type: expectedType,
       })
       setItems(preview.items)
       setIssuer(preview.issuer)
       setStatementType(preview.statement_type)
       setStatementBalance(preview.balance ?? null)
-      setInvoiceYear(preview.invoice_year ?? null)
-      setInvoiceMonth(preview.invoice_month ?? null)
+      setInvoiceYear(preview.invoice_year ?? preview.import_year ?? null)
+      setInvoiceMonth(preview.invoice_month ?? preview.import_month ?? null)
       setPeriodStart(preview.period_start ?? null)
       setPeriodEnd(preview.period_end ?? null)
       setDueDate(preview.due_date ?? null)
+      setFileSha(preview.file_sha256 ?? '')
       if (preview.wallet_id) setWalletId(preview.wallet_id)
       const start = preview.period_start ? formatDay(preview.period_start) : ''
       const end = preview.period_end ? formatDay(preview.period_end) : ''
       setPeriod(start && end ? `${start} – ${end}` : start || end)
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não consegui ler o extrato.'
       setItems(null)
-      setError(err instanceof Error ? err.message : 'Não consegui ler o extrato.')
+      setError(message)
+      showImportAlert(message)
     } finally {
       setBusy(false)
     }
@@ -176,14 +196,18 @@ export function StatementImport({
       setError('Marque pelo menos um lançamento para importar.')
       return
     }
+    if (!selectedWalletId) {
+      setError(creditMode ? 'Escolha o cartão desta fatura.' : 'Escolha a conta deste extrato.')
+      return
+    }
     setBusy(true)
     setError('')
     try {
       await api.importStatement({
-        wallet_id: walletId || null,
+        wallet_id: selectedWalletId,
         member_id: memberId || null,
         apply_to_invoice: statementType === 'credit_card' || Boolean(selectedWallet && isCredit(selectedWallet) && applyToInvoice),
-        statement_type: statementType,
+        statement_type: statementType || expectedType,
         invoice_year: invoiceYear,
         invoice_month: invoiceMonth,
         statement_balance:
@@ -192,6 +216,8 @@ export function StatementImport({
             : statementBalance,
         period_start: periodStart,
         period_end: periodEnd,
+        file_sha256: fileSha,
+        file_name: file?.name ?? '',
         items: selected.map((item) => ({
           date: item.date.slice(0, 10),
           description: item.description.trim(),
@@ -201,9 +227,13 @@ export function StatementImport({
         })),
       })
       await onImported()
-      onClose()
+      setItems(null)
+      setFile(null)
+      setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao lançar o extrato.')
+      const message = err instanceof Error ? err.message : 'Erro ao lançar o extrato.'
+      setError(message)
+      showImportAlert(message)
     } finally {
       setBusy(false)
     }
@@ -229,8 +259,9 @@ export function StatementImport({
       {items == null ? (
         <>
           <p className="meta" style={{ margin: 0 }}>
-            Manda o CSV, o OFX ou o PDF da Nubank (conta ou fatura). O Fluxo lê as movimentações, ignora o que já
-            está lançado e deixa você conferir Pix, débitos e entradas.
+            {creditMode
+              ? 'Manda o PDF ou o OFX da fatura. O Fluxo lê as compras, casa com as contas que você já cadastrou e atualiza a fatura do mês do documento.'
+              : 'Manda o CSV, o OFX ou o PDF da conta. O Fluxo lança os gastos, ignora o que já está no extrato e recusa o arquivo se este mês já foi importado.'}
           </p>
           <label>
             Quem movimentou
@@ -241,7 +272,7 @@ export function StatementImport({
                 setMemberId(next)
                 const options = walletsForMember(next)
                 if (!options.some((wallet) => wallet.id === walletId)) {
-                  setWalletId(options.find((wallet) => wallet.kind === 'checking')?.id ?? options[0]?.id ?? 0)
+                  setWalletId(options[0]?.id ?? 0)
                 }
               }}
             >
@@ -253,22 +284,20 @@ export function StatementImport({
             </select>
           </label>
           <label>
-            Conta / cartão
-            <select value={walletId || ''} onChange={(e) => setWalletId(Number(e.target.value))}>
-              <option value="">Sem conta (só no extrato)</option>
-              {memberWallets.map((wallet) => (
-                <option key={wallet.id} value={wallet.id}>
-                  {wallet.name}
-                  {isCredit(wallet) ? ' · cartão' : wallet.kind === 'checking' ? ' · Pix' : ''}
-                </option>
-              ))}
+            {creditMode ? 'Cartão' : 'Conta'}
+            <select value={selectedWalletId || ''} onChange={(e) => setWalletId(Number(e.target.value))}>
+              {memberWallets.length === 0 ? (
+                <option value="">{creditMode ? 'Cadastre um cartão em Configuração' : 'Cadastre uma conta em Configuração'}</option>
+              ) : (
+                memberWallets.map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>
+                    {wallet.name}
+                    {isCredit(wallet) ? ' · cartão' : wallet.kind === 'checking' ? ' · Pix' : ''}
+                  </option>
+                ))
+              )}
             </select>
           </label>
-          {!memberWallets.some((wallet) => wallet.kind === 'checking') ? (
-            <p className="meta" style={{ margin: 0 }}>
-              Se a conta ainda não está em Configuração, o lançamento entra no extrato sem mexer no Pix.
-            </p>
-          ) : null}
           <div>
             <span className="field-label">Arquivo</span>
             <input
@@ -282,7 +311,7 @@ export function StatementImport({
               }}
             />
             <button type="button" className="ghost statement-file-btn" onClick={() => fileRef.current?.click()}>
-              {file ? file.name : 'Escolher CSV, OFX ou PDF'}
+              {file ? file.name : creditMode ? 'Escolher PDF ou OFX da fatura' : 'Escolher CSV, OFX ou PDF'}
             </button>
           </div>
           <button className="primary" type="button" disabled={busy} onClick={() => void readFile()}>
@@ -294,9 +323,10 @@ export function StatementImport({
           <p className="meta" style={{ margin: 0 }}>
             {issuerLabel(issuer) ? `${issuerLabel(issuer)} · ` : ''}
             {period || 'movimentações encontradas'}
+            {` · ${creditMode ? 'fatura' : 'extrato'} ${String(competenceMonth).padStart(2, '0')}/${competenceYear}`}
             {statementType === 'credit_card' && dueDate ? ` · vence ${formatDay(dueDate)}` : ''}
             {statementType === 'credit_card' && statementBalance != null
-              ? ` · fatura ${currency.format(statementBalance)}`
+              ? ` · ${currency.format(statementBalance)}`
               : ''}
             {`. ${newCount} novas`}
             {matchedCount ? ` · ${matchedCount} já no Fluxo` : ''}
@@ -378,7 +408,8 @@ export function StatementImport({
           ) : null}
           {selectedWallet && isCredit(selectedWallet) && statementType === 'credit_card' ? (
             <p className="meta statement-invoice-opt" style={{ margin: 0 }}>
-              Esta importação atualiza automaticamente a fatura de {invoiceMonth?.toString().padStart(2, '0')}/{invoiceYear} do {selectedWallet.name}.
+              Esta importação atualiza a fatura de {String(invoiceMonth ?? competenceMonth).padStart(2, '0')}/
+              {invoiceYear ?? competenceYear} do {selectedWallet.name}.
             </p>
           ) : null}
           <p className="meta" style={{ margin: 0 }}>

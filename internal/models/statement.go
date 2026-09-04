@@ -1,5 +1,9 @@
 package models
 
+import "time"
+
+// ParsedStatement is the Python response for a statement PDF/CSV.
+
 // ParsedStatement is the Python response for a statement PDF/CSV.
 type ParsedStatement struct {
 	Issuer        string                `json:"issuer"`
@@ -32,6 +36,9 @@ type StatementPreview struct {
 	DueDate       *string                `json:"due_date,omitempty"`
 	WalletID      *int                   `json:"wallet_id,omitempty"`
 	MemberID      *int                   `json:"member_id,omitempty"`
+	FileSHA256    string                 `json:"file_sha256,omitempty"`
+	ImportYear    *int                   `json:"import_year,omitempty"`
+	ImportMonth   *int                   `json:"import_month,omitempty"`
 	NewCount      int                    `json:"new_count"`
 	MatchedCount  int                    `json:"matched_count"`
 	SkippedCount  int                    `json:"skipped_count"`
@@ -64,6 +71,8 @@ type ImportStatementInput struct {
 	StatementBalance *float64              `json:"statement_balance"`
 	PeriodStart      *string               `json:"period_start"`
 	PeriodEnd        *string               `json:"period_end"`
+	FileSHA256       string                `json:"file_sha256"`
+	FileName         string                `json:"file_name"`
 	Items            []ImportStatementItem `json:"items"`
 }
 
@@ -80,4 +89,16 @@ type ImportStatementItem struct {
 type ImportStatementResult struct {
 	Created int           `json:"created"`
 	Items   []Transaction `json:"items"`
+}
+
+// StatementImport is one uploaded statement document already accepted.
+type StatementImport struct {
+	ID            int       `json:"id"`
+	WalletID      int       `json:"wallet_id"`
+	StatementType string    `json:"statement_type"`
+	Year          int       `json:"year"`
+	Month         int       `json:"month"`
+	FileSHA256    string    `json:"file_sha256"`
+	FileName      string    `json:"file_name"`
+	CreatedAt     time.Time `json:"created_at"`
 }

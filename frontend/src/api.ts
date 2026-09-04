@@ -248,6 +248,7 @@ export const api = {
     member_id?: number | null
     year: number
     month: number
+    expected_type?: 'credit_card' | 'account'
   }) => {
     const form = new FormData()
     form.append('file', file)
@@ -255,6 +256,7 @@ export const api = {
     if (body.member_id) form.append('member_id', String(body.member_id))
     form.append('year', String(body.year))
     form.append('month', String(body.month))
+    if (body.expected_type) form.append('expected_type', body.expected_type)
     const response = await fetch(`${API_URL}/statements/preview`, {
       method: 'POST',
       body: form,
@@ -276,6 +278,8 @@ export const api = {
     statement_balance?: number | null
     period_start?: string | null
     period_end?: string | null
+    file_sha256?: string
+    file_name?: string
     items: Array<{
       date: string
       description: string

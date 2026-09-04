@@ -8,6 +8,7 @@ import {
   ChevronLeftIcon,
   HomeNavIcon,
   iconLabel,
+  ImportNavIcon,
   LedgerNavIcon,
   PencilIcon,
   QuickActionIcon,
@@ -56,7 +57,7 @@ import {
   setQuickLaunchUrl,
 } from './quickAdd'
 import { QuickLaunch } from './QuickLaunch'
-import { StatementImport } from './StatementImport'
+import { StatementImport, type StatementImportMode } from './StatementImport'
 import type {
   Bill,
   BillAmountMode,
@@ -78,8 +79,8 @@ import type {
 } from './types'
 import './index.css'
 
-type View = 'home' | 'ledger' | 'bills' | 'savings' | 'family' | 'categories' | 'statistics' | 'settings' | 'accounts'
-type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | 'import-statement' | 'save-target' | null
+type View = 'home' | 'ledger' | 'bills' | 'savings' | 'family' | 'categories' | 'statistics' | 'settings' | 'accounts' | 'import'
+type SheetMode = 'expense' | 'income' | 'freelance' | 'member' | 'bill' | 'category' | 'goal' | 'wallet' | 'pay-bill' | 'pay-invoice' | 'save-target' | null
 type WalletOwner = number | 'joint'
 type MemberBenefitKey = 'checking' | 'meal' | 'food' | 'fuel'
 
@@ -435,6 +436,7 @@ export default function App() {
     month: new Date().getMonth() + 1,
   })
   const [importWalletId, setImportWalletId] = useState(0)
+  const [importMode, setImportMode] = useState<StatementImportMode | null>(null)
 
   const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
@@ -1007,9 +1009,11 @@ export default function App() {
     setSheet('bill')
   }
 
-  function openStatementImport(walletId?: number) {
+  function openStatementImport(walletId?: number, mode: StatementImportMode | null = null) {
     const memberId = defaultMemberId()
-    const fallback = preferredSpendWallet(wallets, memberId)
+    const fallback = mode === 'credit'
+      ? wallets.find((wallet) => isCreditWallet(wallet) && (wallet.member_id == null || wallet.member_id === memberId))
+      : preferredSpendWallet(wallets, memberId)
     setEditingTxId(null)
     setEditingMemberId(null)
     setEditingBillId(null)
@@ -1018,7 +1022,9 @@ export default function App() {
     setEditingWalletId(null)
     setPayingBill(null)
     setImportWalletId(walletId ?? fallback?.id ?? 0)
-    setSheet('import-statement')
+    setImportMode(mode ?? (walletId ? 'credit' : null))
+    setSheet(null)
+    setView('import')
   }
 
   function openWalletSheet(wallet: Wallet) {
@@ -1571,7 +1577,6 @@ export default function App() {
   function sheetHeading() {
     if (sheet === 'pay-bill') return 'Confirmar pagamento'
     if (sheet === 'pay-invoice') return 'Pagar fatura'
-    if (sheet === 'import-statement') return 'Importar extrato'
     if (sheet === 'wallet') {
       if (editingWalletId) return walletForm.kind === 'credit' ? 'Editar cartão' : 'Editar saldo'
       if (walletForm.kind === 'credit') return 'Novo cartão'
@@ -1764,13 +1769,19 @@ export default function App() {
     )
   }
 
-  function renderCardTxRow(tx: Transaction) {
+  function renderCardTxRow(tx: Transaction, invoicePaid = false) {
     const cat = categoryById.get(tx.category_id)
     const installment = installmentFromDescription(tx.description)
     const name = stripInstallmentLabel(tx.description)
     return (
-      <article key={`tx-${tx.id}`} className="row bill-manage-row">
-        <div className="check-pay" aria-hidden="true" />
+      <article key={`tx-${tx.id}`} className={`row bill-manage-row${invoicePaid ? ' paid' : ''}`}>
+        <div className={`check-pay${invoicePaid ? ' on' : ''}`} aria-hidden="true">
+          {invoicePaid ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M5 12.5 9.5 17 19 7" />
+            </svg>
+          ) : null}
+        </div>
         <div className="row-main">
           <h3>
             {name}
@@ -2237,7 +2248,7 @@ export default function App() {
               <strong>Freelancer</strong>
               <span>entrada extra</span>
             </button>
-            <button type="button" className="ledger-extra" onClick={() => openStatementImport()}>
+            <button type="button" className="ledger-extra" onClick={() => openStatementImport(undefined, 'debit')}>
               <strong>Extrato</strong>
               <span>CSV, OFX ou PDF</span>
             </button>
@@ -2365,14 +2376,14 @@ export default function App() {
                             <p className="section-label">Cartão {card.name}</p>
                             <div className="list">
                               {onCard.map((bill) => renderBillRow(bill))}
-                              {extraTxs.map((tx) => renderCardTxRow(tx))}
+                              {extraTxs.map((tx) => renderCardTxRow(tx, Boolean(invoice && invoice.outstanding <= 0)))}
                               {renderFaturaRow(card)}
                             </div>
                             <button
                               type="button"
                               className="ghost"
                               style={{ margin: '0.35rem 0 0.85rem' }}
-                              onClick={() => openStatementImport(card.id)}
+                              onClick={() => openStatementImport(card.id, 'credit')}
                             >
                               Importar fatura do {card.name}
                             </button>
@@ -2397,6 +2408,61 @@ export default function App() {
             </button>
           </section>
         </>
+      )}
+
+      {view === 'import' && (
+        <section className="card">
+          <h2>Importar extrato</h2>
+          <p className="meta" style={{ marginBottom: '0.85rem' }}>
+            Escolha o tipo de documento. O Fluxo lê o mês no arquivo e recusa se essa competência já foi importada.
+          </p>
+          <div className="import-modes">
+            <button
+              type="button"
+              className={importMode === 'credit' ? 'active' : ''}
+              onClick={() => {
+                setImportMode('credit')
+                const memberId = defaultMemberId()
+                const card =
+                  wallets.find((wallet) => wallet.id === importWalletId && isCreditWallet(wallet)) ??
+                  wallets.find((wallet) => isCreditWallet(wallet) && (wallet.member_id == null || wallet.member_id === memberId))
+                setImportWalletId(card?.id ?? 0)
+              }}
+            >
+              <strong>Cartão de crédito</strong>
+              <span>contas da fatura</span>
+            </button>
+            <button
+              type="button"
+              className={importMode === 'debit' ? 'active' : ''}
+              onClick={() => {
+                setImportMode('debit')
+                const memberId = defaultMemberId()
+                const checking = preferredSpendWallet(wallets, memberId)
+                setImportWalletId(checking && !isCreditWallet(checking) ? checking.id : 0)
+              }}
+            >
+              <strong>Cartão de débito</strong>
+              <span>gastos da conta</span>
+            </button>
+          </div>
+          {importMode ? (
+            <StatementImport
+              key={importMode}
+              mode={importMode}
+              categories={categories}
+              members={personMembers}
+              wallets={wallets}
+              defaultMemberId={defaultMemberId()}
+              defaultWalletId={importWalletId}
+              year={year}
+              month={month}
+              onImported={refresh}
+            />
+          ) : (
+            <p className="empty">Selecione crédito para lançar a fatura nas contas, ou débito para lançar os gastos.</p>
+          )}
+        </section>
       )}
 
       {view === 'savings' && selectedGoal ? (
@@ -2955,6 +3021,10 @@ export default function App() {
           <LedgerNavIcon />
           Gastos
         </button>
+        <button type="button" className={view === 'import' ? 'active' : ''} onClick={() => openStatementImport()}>
+          <ImportNavIcon />
+          Extrato
+        </button>
         <button type="button" className={view === 'statistics' ? 'active' : ''} onClick={() => setView('statistics')}>
           <StatsNavIcon />
           Estatísticas
@@ -2979,19 +3049,7 @@ export default function App() {
               </button>
             </header>
 
-            {sheet === 'import-statement' ? (
-              <StatementImport
-                categories={categories}
-                members={personMembers}
-                wallets={wallets}
-                defaultMemberId={defaultMemberId()}
-                defaultWalletId={importWalletId}
-                year={year}
-                month={month}
-                onClose={() => setSheet(null)}
-                onImported={refresh}
-              />
-            ) : sheet === 'pay-invoice' ? (
+            {sheet === 'pay-invoice' ? (
               <form className="form" onSubmit={submitPayInvoice}>
                 {(() => {
                   const card = wallets.find((wallet) => wallet.id === invoiceForm.wallet_id)
@@ -3008,6 +3066,28 @@ export default function App() {
                         {card?.name ?? 'Cartão'} · fatura {String(invoiceForm.month).padStart(2, '0')}/{invoiceForm.year}
                         {' · '}{currency.format(invoice?.outstanding ?? 0)}
                       </p>
+                      {(() => {
+                        const components = listedBills.filter((bill) => {
+                          if (bill.wallet_id !== invoiceForm.wallet_id) return false
+                          return billActiveInMonth(bill, invoiceForm.year, invoiceForm.month)
+                        })
+                        if (components.length === 0) return null
+                        return (
+                          <>
+                            <p className="meta" style={{ margin: 0 }}>
+                              Ao quitar, estas contas da fatura serão marcadas como pagas:
+                            </p>
+                            <div className="invoice-components">
+                              {components.map((bill) => (
+                                <article key={bill.id}>
+                                  <span>{bill.name}</span>
+                                  <strong>{currency.format(billChargeInMonth(bill, invoiceForm.year, invoiceForm.month))}</strong>
+                                </article>
+                              ))}
+                            </div>
+                          </>
+                        )
+                      })()}
                       <label>
                         Valor
                         <input

@@ -55,6 +55,7 @@ func New(deps Dependencies) http.Handler {
 		Members:      deps.Store,
 		Wallets:      deps.Store,
 		Bills:        deps.Store,
+		Imports:      deps.Store,
 	}
 
 	mux := http.NewServeMux()
