@@ -193,7 +193,10 @@ func TestCreditCardExpenseRaisesInvoiceAndPayInvoiceDebitsChecking(t *testing.T)
 			end_month TEXT,
 			notes TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
-			wallet_id INTEGER
+			wallet_id INTEGER,
+			source TEXT NOT NULL DEFAULT 'manual',
+			installment_start INTEGER NOT NULL DEFAULT 0,
+			installment_total INTEGER NOT NULL DEFAULT 0
 		);
 	`
 	if _, err := db.ExecContext(ctx, schema); err != nil {

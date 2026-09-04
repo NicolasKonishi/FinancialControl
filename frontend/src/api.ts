@@ -85,6 +85,9 @@ export const api = {
     start_month: string
     end_month?: string | null
     notes?: string
+    source?: 'manual' | 'statement' | string
+    installment_start?: number
+    installment_total?: number
   }) => request<Bill>('/bills', { method: 'POST', body: JSON.stringify(body) }),
   updateBill: (
     id: number,
@@ -102,6 +105,9 @@ export const api = {
       start_month: string
       end_month?: string | null
       notes?: string
+      source?: 'manual' | 'statement' | string
+      installment_start?: number
+      installment_total?: number
     },
   ) => request<Bill>(`/bills/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteBill: (id: number) => request<void>(`/bills/${id}`, { method: 'DELETE' }),

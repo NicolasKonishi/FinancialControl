@@ -31,10 +31,17 @@ import {
   type DeviceAccount,
 } from './deviceAccounts'
 import {
+  addMonthsToMonthKey,
   billActiveInMonth,
   billChargeInMonth,
+  billInstallmentPosition,
   billShareForMember,
+  cardBillMatchesTx,
+  cardInvoiceMonthKey,
+  installmentFromDescription,
   parseLocaleNumber,
+  stripInstallmentLabel,
+  transactionInStatementPeriod,
 } from './billUtils'
 import { creditCardLabel, CREDIT_ISSUERS } from './creditCards'
 import { InstallBanner } from './InstallBanner'
@@ -354,6 +361,7 @@ export default function App() {
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null)
   const [editingGoalId, setEditingGoalId] = useState<number | null>(null)
   const [editingWalletId, setEditingWalletId] = useState<number | null>(null)
+  const [cardPurchaseMode, setCardPurchaseMode] = useState(false)
   const [payingBill, setPayingBill] = useState<Bill | null>(null)
   const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null)
   const [goalAdjustAmount, setGoalAdjustAmount] = useState('')
@@ -392,6 +400,9 @@ export default function App() {
     start_month: currentMonthKey(),
     end_month: '',
     notes: '',
+    source: 'manual',
+    installment_start: 0,
+    installment_total: 0,
   })
   const [goalForm, setGoalForm] = useState({
     name: '',
@@ -843,6 +854,7 @@ export default function App() {
   }
 
   function openSheet(mode: SheetMode, prefill?: TxPrefill) {
+	setCardPurchaseMode(false)
     setEditingTxId(null)
     setEditingMemberId(null)
     setEditingBillId(null)
@@ -892,6 +904,9 @@ export default function App() {
         start_month: currentMonthKey(),
         end_month: '',
         notes: '',
+        source: 'manual',
+        installment_start: 0,
+        installment_total: 0,
       })
     } else if (mode === 'freelance') {
       const freelance = categories.find((c) => c.icon === 'freelance') ?? categories[0]
@@ -932,6 +947,47 @@ export default function App() {
       })
     }
     setSheet(mode)
+  }
+
+  function openCardPurchase(
+    card: Wallet,
+    prefill?: { name?: string; amount?: string; category_id?: number; member_ids?: number[] },
+  ) {
+    const shopping = categories.find((category) => category.icon === 'shopping') ?? categories[0]
+    const invoiceMonth = cardInvoiceMonthKey(card)
+    setEditingTxId(null)
+    setEditingMemberId(null)
+    setEditingBillId(null)
+    setEditingCategoryId(null)
+    setEditingGoalId(null)
+    setEditingWalletId(null)
+    setPayingBill(null)
+    setCardPurchaseMode(true)
+    setBillForm({
+      name: prefill?.name ?? '',
+      amount: prefill?.amount ?? '',
+      amount_mode: 'fixed',
+      interest_rate: '',
+      category_id: prefill?.category_id || shopping?.id || 0,
+      member_ids: prefill?.member_ids?.length
+        ? prefill.member_ids
+        : card.member_id
+          ? [card.member_id]
+          : defaultMemberId()
+            ? [defaultMemberId()]
+            : [],
+      wallet_id: card.id,
+      due_day: String(card.due_day ?? 1),
+      frequency: 'monthly',
+      recurrence: 'until',
+      start_month: invoiceMonth,
+      end_month: invoiceMonth,
+      notes: '',
+      source: 'manual',
+      installment_start: 0,
+      installment_total: 0,
+    })
+    setSheet('bill')
   }
 
   function openStatementImport(walletId?: number) {
@@ -1107,7 +1163,7 @@ export default function App() {
       setError('Selecione uma categoria para a conta.')
       return
     }
-    if (billForm.recurrence === 'until' && !billForm.end_month) {
+    if (!cardPurchaseMode && billForm.recurrence === 'until' && !billForm.end_month) {
       setError('Escolha o mês final.')
       return
     }
@@ -1136,6 +1192,12 @@ export default function App() {
       setError('Entre com uma conta da família antes de salvar.')
       return
     }
+    const parsedInstallment = cardPurchaseMode ? installmentFromDescription(billForm.name) : null
+    const installmentStart = parsedInstallment?.current ?? billForm.installment_start
+    const installmentTotal = parsedInstallment?.total ?? billForm.installment_total
+    const isInstallment = installmentStart > 0 && installmentTotal >= installmentStart
+    const recurringCard = cardPurchaseMode && billForm.recurrence === 'ongoing' && !isInstallment
+    const cardRemaining = isInstallment ? installmentTotal - installmentStart : 0
     const payload = {
       name: billForm.name,
       amount,
@@ -1145,11 +1207,20 @@ export default function App() {
       member_ids: memberIds,
       wallet_id: billForm.wallet_id || null,
       due_day: Number(billForm.due_day),
-      frequency: billForm.frequency,
-      recurrence: billForm.recurrence,
+      frequency: cardPurchaseMode ? 'monthly' : billForm.frequency,
+      recurrence: cardPurchaseMode ? (recurringCard ? 'ongoing' : 'until') : billForm.recurrence,
       start_month: billForm.start_month,
-      end_month: billForm.recurrence === 'until' ? billForm.end_month : null,
+      end_month: cardPurchaseMode
+        ? recurringCard
+          ? null
+          : addMonthsToMonthKey(billForm.start_month, cardRemaining)
+        : billForm.recurrence === 'until'
+          ? billForm.end_month
+          : null,
       notes: billForm.notes,
+      source: billForm.source,
+      installment_start: installmentStart,
+      installment_total: installmentTotal,
     }
     try {
       if (editingBillId) {
@@ -1423,6 +1494,9 @@ export default function App() {
     companyMember != null &&
     billForm.member_ids.length === 1 &&
     billForm.member_ids[0] === companyMember.id
+  const cardPurchaseInstallment = cardPurchaseMode
+    ? installmentFromDescription(billForm.name)
+    : null
   const goalSplitFamily =
     personMembers.length > 1 &&
     personMembers.every((member) => goalForm.member_ids.includes(member.id))
@@ -1456,13 +1530,15 @@ export default function App() {
     if (sheet === 'member') return editingMemberId ? 'Editar pessoa' : 'Nova pessoa'
     if (sheet === 'category') return editingCategoryId ? 'Editar categoria' : 'Nova categoria'
     if (sheet === 'goal') return editingGoalId ? 'Editar meta' : 'Nova meta'
-    if (sheet === 'bill') return editingBillId ? 'Editar conta' : 'Nova conta'
+    if (sheet === 'bill') return editingBillId ? 'Editar conta' : cardPurchaseMode ? 'Nova compra no cartão' : 'Nova conta'
     if (sheet === 'expense') return editingTxId ? 'Editar gasto' : 'Novo gasto'
     if (sheet === 'freelance') return 'Freelancer feito'
     return editingTxId ? 'Editar entrada' : 'Salário recebido'
   }
 
   function openBillEditor(bill: Bill) {
+    const card = billWallet(wallets, bill)
+    setCardPurchaseMode(Boolean(card && isCreditWallet(card)))
     setEditingBillId(bill.id)
     setBillForm({
       name: bill.name,
@@ -1478,6 +1554,9 @@ export default function App() {
       start_month: bill.start_month,
       end_month: bill.end_month ?? '',
       notes: bill.notes ?? '',
+      source: bill.source || 'manual',
+      installment_start: bill.installment_start ?? 0,
+      installment_total: bill.installment_total ?? 0,
     })
     setSheet('bill')
   }
@@ -1548,6 +1627,7 @@ export default function App() {
       .filter(Boolean)
       .join(', ')
     const card = billWallet(wallets, bill)
+    const installment = billInstallmentPosition(bill, year, month)
     const overdue = !paid && isBillOverdue(bill.due_day, year, month)
     const ids = bill.member_ids ?? []
     const shareLabel =
@@ -1577,13 +1657,31 @@ export default function App() {
           ) : null}
         </button>
         <div className="row-main">
-          <h3>{bill.name}</h3>
+          <h3>
+            {bill.name}
+            {installment ? (
+              <span className="bill-installment-badge">
+                {installment.current}/{installment.total}
+              </span>
+            ) : null}
+          </h3>
           <p>
             vence dia {bill.due_day}
             {overdue ? ' · atrasada' : ''}
             {paid && paidByName ? ` · pago por ${paidByName}` : ''}
             {payHint}
             {cat ? ` · ${cat.name}` : ''}
+            {installment
+              ? installment.remaining === 0
+                ? ` · parcela ${installment.current}/${installment.total} · última parcela`
+                : installment.remaining === 1
+                  ? ` · parcela ${installment.current}/${installment.total} · falta 1 parcela`
+                  : ` · parcela ${installment.current}/${installment.total} · faltam ${installment.remaining} parcelas`
+              : card && bill.recurrence === 'ongoing'
+                ? ' · todo mês · previsão'
+                : ''}
+            {card && bill.source === 'statement' ? ' · importado da fatura' : ''}
+            {card && bill.source !== 'statement' && bill.recurrence !== 'ongoing' ? ' · lançamento manual' : ''}
             {shareLabel}
           </p>
         </div>
@@ -1607,6 +1705,39 @@ export default function App() {
           </div>
           <div className={`amount ${paid ? 'income' : 'expense'}`}>{currency.format(monthAmount)}</div>
         </div>
+      </article>
+    )
+  }
+
+  function renderCardTxRow(tx: Transaction) {
+    const cat = categoryById.get(tx.category_id)
+    const installment = installmentFromDescription(tx.description)
+    const name = stripInstallmentLabel(tx.description)
+    return (
+      <article key={`tx-${tx.id}`} className="row bill-manage-row">
+        <div className="check-pay" aria-hidden="true" />
+        <div className="row-main">
+          <h3>
+            {name}
+            {installment ? (
+              <span className="bill-installment-badge">
+                {installment.current}/{installment.total}
+              </span>
+            ) : null}
+          </h3>
+          <p>
+            importado da fatura
+            {cat ? ` · ${cat.name}` : ''}
+            {installment
+              ? installment.current < installment.total
+                ? installment.total - installment.current === 1
+                  ? ` · parcela ${installment.current}/${installment.total} · falta 1 parcela`
+                  : ` · parcela ${installment.current}/${installment.total} · faltam ${installment.total - installment.current} parcelas`
+                : ` · parcela ${installment.current}/${installment.total} · última parcela`
+              : ''}
+          </p>
+        </div>
+        <div className={`amount expense`}>{currency.format(tx.amount)}</div>
       </article>
     )
   }
@@ -2142,12 +2273,35 @@ export default function App() {
                     <>
                       {renderCashGroups()}
                       {listedCreditCards.map((card) => {
+                        const invoice = invoiceByWalletId.get(card.id)
                         const onCard = listedBills.filter((bill) => bill.wallet_id === card.id)
+                        const extraTxs =
+                          invoice?.source === 'statement'
+                            ? transactions
+                                .filter((tx) => {
+                                  if (tx.wallet_id !== card.id || tx.type !== 'expense') return false
+                                  if (memberFilter !== 'all' && tx.member_id !== memberFilter) return false
+                                  const inPeriod =
+                                    invoice.statement_period_start && invoice.statement_period_end
+                                      ? transactionInStatementPeriod(tx, invoice)
+                                      : cardInvoiceMonthKey(
+                                          card,
+                                          new Date(`${formatDate(tx.date)}T12:00:00`),
+                                        ) === `${year}-${String(month).padStart(2, '0')}`
+                                  if (!inPeriod) return false
+                                  return !onCard.some((bill) => cardBillMatchesTx(bill, tx))
+                                })
+                                .sort(
+                                  (a, b) =>
+                                    formatDate(a.date).localeCompare(formatDate(b.date)) || a.id - b.id,
+                                )
+                            : []
                         return (
                           <div key={card.id}>
                             <p className="section-label">Cartão {card.name}</p>
                             <div className="list">
                               {onCard.map((bill) => renderBillRow(bill))}
+                              {extraTxs.map((tx) => renderCardTxRow(tx))}
                               {renderFaturaRow(card)}
                             </div>
                             <button
@@ -2162,10 +2316,7 @@ export default function App() {
                               type="button"
                               className="ghost"
                               style={{ margin: '0.35rem 0 0.85rem 0.35rem' }}
-                              onClick={() => openSheet('expense', {
-                                member_id: card.member_id ?? defaultMemberId(),
-                                wallet_id: card.id,
-                              })}
+                              onClick={() => openCardPurchase(card)}
                             >
                               Adicionar compra manualmente
                             </button>
@@ -3223,44 +3374,143 @@ export default function App() {
             ) : sheet === 'bill' ? (
               <form className="form bill-form" onSubmit={submitBill} noValidate>
                 <div className="bill-form-layout">
-                  <BillSchedulePicker
-                    startMonth={billForm.start_month}
-                    dueDay={Number(billForm.due_day) || 1}
-                    frequency={billForm.frequency}
-                    onDateChange={(startMonth, dueDay) =>
-                      setBillForm((p) => ({
-                        ...p,
-                        start_month: startMonth,
-                        due_day: String(dueDay),
-                      }))
-                    }
-                    onFrequencyChange={(frequency) =>
-                      setBillForm((p) => ({ ...p, frequency }))
-                    }
-                  />
+                  {cardPurchaseMode ? (
+                    <div className="card-charge-month">
+                      <BillEndMonthPicker
+                        value={billForm.start_month}
+                        minMonth="2000-01"
+                        label={
+                          billForm.recurrence === 'ongoing' && !cardPurchaseInstallment
+                            ? 'A partir de qual fatura?'
+                            : 'Qual mês irá ser cobrado?'
+                        }
+                        onChange={(start_month) => {
+                          const parsed = installmentFromDescription(billForm.name)
+                          const start = parsed?.current ?? billForm.installment_start
+                          const total = parsed?.total ?? billForm.installment_total
+                          const isInst = start > 0 && total >= start
+                          const remaining = isInst ? total - start : 0
+                          setBillForm((p) => ({
+                            ...p,
+                            start_month,
+                            end_month:
+                              p.recurrence === 'ongoing' && !isInst
+                                ? ''
+                                : addMonthsToMonthKey(start_month, remaining),
+                          }))
+                        }}
+                      />
+                      {!cardPurchaseInstallment ? (
+                        <div className="chip-row" style={{ marginTop: '0.15rem' }}>
+                          <button
+                            type="button"
+                            className={billForm.recurrence !== 'ongoing' ? 'chip active' : 'chip'}
+                            onClick={() =>
+                              setBillForm((p) => ({
+                                ...p,
+                                recurrence: 'until',
+                                end_month: p.start_month,
+                              }))
+                            }
+                          >
+                            Só nesta fatura
+                          </button>
+                          <button
+                            type="button"
+                            className={billForm.recurrence === 'ongoing' ? 'chip active' : 'chip'}
+                            onClick={() =>
+                              setBillForm((p) => ({
+                                ...p,
+                                recurrence: 'ongoing',
+                                end_month: '',
+                                installment_start: 0,
+                                installment_total: 0,
+                              }))
+                            }
+                          >
+                            Todo mês
+                          </button>
+                        </div>
+                      ) : null}
+                      <p className="meta">
+                        {cardPurchaseInstallment
+                          ? 'As parcelas seguintes entram nas próximas faturas.'
+                          : billForm.recurrence === 'ongoing'
+                            ? 'Entra nesta fatura e segue como previsão nos próximos meses.'
+                            : 'Por padrão, a compra entra na fatura do mês atual.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <BillSchedulePicker
+                      startMonth={billForm.start_month}
+                      dueDay={Number(billForm.due_day) || 1}
+                      frequency={billForm.frequency}
+                      onDateChange={(startMonth, dueDay) =>
+                        setBillForm((p) => ({
+                          ...p,
+                          start_month: startMonth,
+                          due_day: String(dueDay),
+                        }))
+                      }
+                      onFrequencyChange={(frequency) =>
+                        setBillForm((p) => ({ ...p, frequency }))
+                      }
+                    />
+                  )}
                   <div className="bill-form-fields">
                     <label>
                       Nome
                       <input
                         required
                         value={billForm.name}
-                        onChange={(e) => setBillForm((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="Internet, Luz…"
+                        onChange={(e) => {
+                          const name = e.target.value
+                          const parsed = cardPurchaseMode ? installmentFromDescription(name) : null
+                          setBillForm((p) => ({
+                            ...p,
+                            name,
+                            installment_start: parsed?.current ?? (cardPurchaseMode && !editingBillId ? 0 : p.installment_start),
+                            installment_total: parsed?.total ?? (cardPurchaseMode && !editingBillId ? 0 : p.installment_total),
+                            end_month: !cardPurchaseMode
+                              ? p.end_month
+                              : parsed
+                                ? addMonthsToMonthKey(p.start_month, parsed.total - parsed.current)
+                                : editingBillId
+                                  ? p.end_month
+                                  : p.start_month,
+                          }))
+                        }}
+                        placeholder={cardPurchaseMode ? 'Ex.: Notebook 1/3' : 'Internet, Luz…'}
                       />
                     </label>
-                    <label>
-                      Tipo de valor
-                      <select
-                        value={billForm.amount_mode}
-                        onChange={(e) => {
-                          const amount_mode = e.target.value as BillAmountMode
-                          setBillForm((p) => ({ ...p, amount_mode }))
-                        }}
-                      >
-                        <option value="fixed">Valor fixo</option>
-                        <option value="interest">Evolução de obra (% juros ao mês)</option>
-                      </select>
-                    </label>
+                    {cardPurchaseInstallment ? (
+                      <p className="meta card-installment-hint">
+                        {cardPurchaseInstallment.total === cardPurchaseInstallment.current
+                          ? `Parcela ${cardPurchaseInstallment.current}/${cardPurchaseInstallment.total}. Esta é a última.`
+                          : `Parcela ${cardPurchaseInstallment.current}/${cardPurchaseInstallment.total}. As próximas ${
+                              cardPurchaseInstallment.total - cardPurchaseInstallment.current
+                            } ${
+                              cardPurchaseInstallment.total - cardPurchaseInstallment.current === 1
+                                ? 'fatura receberá'
+                                : 'faturas receberão'
+                            } esta mesma compra.`}
+                      </p>
+                    ) : null}
+                    {!cardPurchaseMode ? (
+                      <label>
+                        Tipo de valor
+                        <select
+                          value={billForm.amount_mode}
+                          onChange={(e) => {
+                            const amount_mode = e.target.value as BillAmountMode
+                            setBillForm((p) => ({ ...p, amount_mode }))
+                          }}
+                        >
+                          <option value="fixed">Valor fixo</option>
+                          <option value="interest">Evolução de obra (% juros ao mês)</option>
+                        </select>
+                      </label>
+                    ) : null}
                     {billForm.amount_mode === 'fixed' ? (
                       <label>
                         Valor
@@ -3299,29 +3549,33 @@ export default function App() {
                         </label>
                       </>
                     )}
-                    <label>
-                      Duração
-                      <select
-                        value={billForm.recurrence}
-                        onChange={(e) =>
-                          setBillForm((p) => ({
-                            ...p,
-                            recurrence: e.target.value as BillRecurrence,
-                            end_month:
-                              e.target.value === 'until' && !p.end_month ? p.start_month : p.end_month,
-                          }))
-                        }
-                      >
-                        <option value="ongoing">Sem duração de término</option>
-                        <option value="until">Termina em…</option>
-                      </select>
-                    </label>
-                    {billForm.recurrence === 'until' ? (
-                      <BillEndMonthPicker
-                        value={billForm.end_month}
-                        minMonth={billForm.start_month}
-                        onChange={(end_month) => setBillForm((p) => ({ ...p, end_month }))}
-                      />
+                    {!cardPurchaseMode ? (
+                      <>
+                        <label>
+                          Duração
+                          <select
+                            value={billForm.recurrence}
+                            onChange={(e) =>
+                              setBillForm((p) => ({
+                                ...p,
+                                recurrence: e.target.value as BillRecurrence,
+                                end_month:
+                                  e.target.value === 'until' && !p.end_month ? p.start_month : p.end_month,
+                              }))
+                            }
+                          >
+                            <option value="ongoing">Sem duração de término</option>
+                            <option value="until">Termina em…</option>
+                          </select>
+                        </label>
+                        {billForm.recurrence === 'until' ? (
+                          <BillEndMonthPicker
+                            value={billForm.end_month}
+                            minMonth={billForm.start_month}
+                            onChange={(end_month) => setBillForm((p) => ({ ...p, end_month }))}
+                          />
+                        ) : null}
+                      </>
                     ) : null}
                     <label>
                       Categoria
@@ -3339,13 +3593,39 @@ export default function App() {
                         ))}
                       </select>
                     </label>
-                    <label>
-                      Como paga
-                      <select
+                    {cardPurchaseMode ? (
+                      <div>
+                        <span className="field-label">Cartão</span>
+                        <p className="meta" style={{ margin: '0.35rem 0 0' }}>
+                          {wallets.find((wallet) => wallet.id === billForm.wallet_id)?.name ?? 'Cartão de crédito'}
+                        </p>
+                      </div>
+                    ) : (
+                      <label>
+                        Como paga
+                        <select
                         value={billForm.wallet_id || ''}
                         onChange={(e) => {
                           const wallet_id = Number(e.target.value) || 0
                           const wallet = wallets.find((item) => item.id === wallet_id)
+                          if (!editingBillId && wallet && isCreditWallet(wallet)) {
+                            setCardPurchaseMode(true)
+                            setBillForm((p) => {
+                              const start_month = cardInvoiceMonthKey(wallet)
+                              return {
+                                ...p,
+                                wallet_id,
+                                frequency: 'monthly',
+                                recurrence: 'until',
+                                start_month,
+                                end_month: start_month,
+                                due_day: String(wallet.due_day ?? p.due_day),
+                                member_ids: wallet.member_id ? [wallet.member_id] : p.member_ids,
+                              }
+                            })
+                            return
+                          }
+                          if (cardPurchaseMode) setCardPurchaseMode(false)
                           setBillForm((p) => ({
                             ...p,
                             wallet_id,
@@ -3377,8 +3657,9 @@ export default function App() {
                                 : ''}
                             </option>
                           ))}
-                      </select>
-                    </label>
+                        </select>
+                      </label>
+                    )}
                     <div>
                       <span className="field-label">Responsáveis</span>
                       {billPaidByCompany ? (
@@ -3458,9 +3739,20 @@ export default function App() {
                       <select
                         required
                         value={txForm.wallet_id || ''}
-                        onChange={(e) =>
-                          setTxForm((p) => ({ ...p, wallet_id: Number(e.target.value) }))
-                        }
+                        onChange={(e) => {
+                          const wallet_id = Number(e.target.value)
+                          const wallet = wallets.find((item) => item.id === wallet_id)
+                          if (sheet === 'expense' && !editingTxId && wallet && isCreditWallet(wallet)) {
+                            openCardPurchase(wallet, {
+                              name: txForm.description,
+                              amount: txForm.amount,
+                              category_id: txForm.category_id,
+                              member_ids: txForm.member_id ? [txForm.member_id] : undefined,
+                            })
+                            return
+                          }
+                          setTxForm((p) => ({ ...p, wallet_id }))
+                        }}
                       >
                         <option value="">Escolha a conta</option>
                         {spendWalletsForMember(wallets, txForm.member_id, sheet !== 'expense').map((wallet) => (

@@ -186,6 +186,12 @@ button {
   font-weight: 650;
 }
 
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
 .field-label {
   display: block;
   font-size: 0.82rem;
@@ -519,6 +525,37 @@ button {
 
 .bill-end-month-panel {
   margin-top: 0;
+}
+
+.card-charge-month {
+  display: grid;
+  gap: 0.35rem;
+  width: 14.5rem;
+  flex-shrink: 0;
+}
+
+.card-charge-month .chip {
+  padding: 0.32rem 0.55rem;
+  font-size: 0.72rem;
+  box-shadow: none;
+}
+
+.card-installment-hint {
+  margin: 0;
+  color: var(--income);
+}
+
+.bill-installment-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.08rem 0.38rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: 0.08rem;
+  color: var(--income);
+  background: color-mix(in srgb, var(--income) 16%, transparent);
 }
 
 .bill-month-grid {
@@ -1875,7 +1912,8 @@ select {
     flex-direction: column;
   }
 
-  .bill-schedule {
+  .bill-schedule,
+  .card-charge-month {
     width: 100%;
     max-width: 13rem;
   }

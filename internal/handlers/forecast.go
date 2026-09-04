@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NicolasKonishi/FinancialControl/internal/models"
+	"github.com/NicolasKonishi/FinancialControl/internal/statement"
 )
 
 // ForecastStore provides data needed to compute a monthly forecast.
@@ -57,11 +58,17 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 	for _, member := range members {
 		plannedSalary += member.MonthlySalary
 	}
+	coveredTx := map[int]bool{}
+	usedBills := map[int]bool{}
 	for _, tx := range transactions {
 		switch tx.Type {
 		case models.TransactionTypeIncome:
 			extraIncome += tx.Amount
 		case models.TransactionTypeExpense:
+			if statement.ExpenseCoveredByBill(tx, bills, year, month, usedBills) {
+				coveredTx[tx.ID] = true
+				continue
+			}
 			variableExpense += tx.Amount
 		}
 	}
@@ -129,7 +136,7 @@ func (h *Forecast) Monthly(w http.ResponseWriter, r *http.Request) {
 		ProjectedExpense: round2(projectedExpense),
 		SafeDailySpend:   round2(safeDaily),
 		ExpensePaceRatio: round2(pace),
-		ByMember:         buildMemberForecasts(members, transactions, bills, goals, year, month),
+		ByMember:         buildMemberForecasts(members, transactions, bills, goals, year, month, coveredTx),
 	})
 }
 
@@ -139,6 +146,7 @@ func buildMemberForecasts(
 	bills []models.Bill,
 	goals []models.SavingsGoal,
 	year, month int,
+	coveredTx map[int]bool,
 ) []models.MemberForecast {
 	out := make([]models.MemberForecast, 0, len(members))
 	for _, member := range members {
@@ -151,6 +159,9 @@ func buildMemberForecasts(
 			case models.TransactionTypeIncome:
 				extraIncome += tx.Amount
 			case models.TransactionTypeExpense:
+				if coveredTx[tx.ID] {
+					continue
+				}
 				variableExpense += tx.Amount
 			}
 		}

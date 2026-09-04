@@ -49,6 +49,7 @@ type StatementPreviewItem struct {
 	SuggestedIcon        string  `json:"suggested_icon"`
 	AlreadyRecorded      bool    `json:"already_recorded"`
 	MatchedTransactionID *int    `json:"matched_transaction_id,omitempty"`
+	MatchedBillID        *int    `json:"matched_bill_id,omitempty"`
 	Selected             bool    `json:"selected"`
 }
 

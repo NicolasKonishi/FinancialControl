@@ -57,6 +57,7 @@ function isImportable(item: StatementPreviewItem) {
 
 function kindNote(item: StatementPreviewItem) {
   if (item.already_recorded) return 'já lançado'
+  if (item.matched_bill_id) return 'já na lista de contas'
   switch (item.kind) {
     case 'payment':
       return 'pagamento da fatura'
@@ -117,6 +118,12 @@ export function StatementImport({
   const selectedIncome = selected.filter((item) => importType(item) === 'income')
   const selectedExpenseTotal = selectedExpenses.reduce((sum, item) => sum + item.amount, 0)
   const selectedIncomeTotal = selectedIncome.reduce((sum, item) => sum + item.amount, 0)
+  const statementExpenseTotal = (items ?? [])
+    .filter((item) => isImportable(item) && importType(item) === 'expense')
+    .reduce((sum, item) => sum + item.amount, 0)
+  const statementIncomeTotal = (items ?? [])
+    .filter((item) => isImportable(item) && importType(item) === 'income')
+    .reduce((sum, item) => sum + item.amount, 0)
   const newCount = (items ?? []).filter((item) => isImportable(item) && !item.already_recorded).length
   const matchedCount = (items ?? []).filter((item) => item.already_recorded).length
 
@@ -179,7 +186,10 @@ export function StatementImport({
         statement_type: statementType,
         invoice_year: invoiceYear,
         invoice_month: invoiceMonth,
-        statement_balance: statementBalance,
+        statement_balance:
+          statementType === 'credit_card'
+            ? (statementBalance ?? Math.max(0, statementExpenseTotal - statementIncomeTotal))
+            : statementBalance,
         period_start: periodStart,
         period_end: periodEnd,
         items: selected.map((item) => ({

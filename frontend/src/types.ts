@@ -110,6 +110,9 @@ export type Bill = {
   start_month: string
   end_month?: string | null
   notes?: string
+  source: 'manual' | 'statement' | string
+  installment_start?: number
+  installment_total?: number
   created_at: string
 }
 
@@ -195,6 +198,7 @@ export type StatementPreviewItem = {
   suggested_icon: string
   already_recorded: boolean
   matched_transaction_id?: number | null
+  matched_bill_id?: number | null
   selected: boolean
 }
 

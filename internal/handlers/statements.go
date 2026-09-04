@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,6 +39,11 @@ type Statements struct {
 	Categories   CategoryStore
 	Members      MemberStore
 	Wallets      StatementWallets
+	Bills        interface {
+		CreateBill(ctx context.Context, bill models.Bill) (models.Bill, error)
+		ListBills(ctx context.Context) ([]models.Bill, error)
+		UpdateBill(ctx context.Context, id int, bill models.Bill) (models.Bill, error)
+	}
 }
 
 // Preview handles POST /statements/preview.
@@ -70,7 +76,15 @@ func (h *Statements) Preview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preview := statement.BuildPreview(parsed, existing, categories, walletID, memberID)
+	var bills []models.Bill
+	if h.Bills != nil {
+		bills, err = h.Bills.ListBills(r.Context())
+		if err != nil {
+			writeStoreError(w, err, "bill not found")
+			return
+		}
+	}
+	preview := statement.BuildPreview(parsed, existing, categories, walletID, memberID, bills)
 	if destination != nil {
 		h.applyInvoicePreview(&preview, *destination)
 	}
@@ -120,10 +134,41 @@ func (h *Statements) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	created := make([]models.Transaction, 0, len(input.Items))
+	plannedBills := []models.Bill{}
+	usedBillIDs := map[int]bool{}
+	createCardBills := wallet != nil && models.IsCredit(wallet.Kind) && h.Bills != nil
+	if h.Bills != nil {
+		var err error
+		plannedBills, err = h.Bills.ListBills(r.Context())
+		if err != nil {
+			writeStoreError(w, err, "bill not found")
+			return
+		}
+	}
 	for _, item := range input.Items {
 		txType := strings.ToLower(strings.TrimSpace(item.Type))
 		if txType == "" {
 			txType = models.TransactionTypeExpense
+		}
+		invoiceYear, invoiceMonth := itemYearMonth(item)
+		if createCardBills && wallet != nil {
+			invoiceYear, invoiceMonth = cardBillMonth(input, *wallet, item)
+		}
+		if !createCardBills && txType == models.TransactionTypeExpense {
+			planned := statement.BillCandidate(item.Description, item.Amount, walletID)
+			idx := statement.MatchingBill(plannedBills, planned, invoiceYear, invoiceMonth, usedBillIDs, true)
+			if idx < 0 {
+				nextYear, nextMonth := invoiceYear, invoiceMonth+1
+				if nextMonth > 12 {
+					nextYear++
+					nextMonth = 1
+				}
+				idx = statement.MatchingBill(plannedBills, planned, nextYear, nextMonth, usedBillIDs, true)
+			}
+			if idx >= 0 {
+				usedBillIDs[plannedBills[idx].ID] = true
+				continue
+			}
 		}
 		tx, ok := h.buildTx(w, r, item.CategoryID, memberID, walletID, txType, item.Description, item.Amount, item.Date)
 		if !ok {
@@ -139,6 +184,31 @@ func (h *Statements) Import(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		created = append(created, saved)
+		if createCardBills && wallet != nil && txType == models.TransactionTypeExpense {
+			planned, shouldCreate := statementBillForImport(item, *wallet, memberID, invoiceYear, invoiceMonth)
+			matchedIndex := statement.MatchingBill(plannedBills, planned, invoiceYear, invoiceMonth, usedBillIDs, false)
+			if shouldCreate && matchedIndex < 0 {
+				savedBill, err := h.Bills.CreateBill(r.Context(), planned)
+				if err != nil {
+					writeStoreError(w, err, "bill not found")
+					return
+				}
+				plannedBills = append(plannedBills, savedBill)
+				usedBillIDs[savedBill.ID] = true
+			} else if shouldCreate {
+				matched := plannedBills[matchedIndex]
+				usedBillIDs[matched.ID] = true
+				if matched.Source != models.BillSourceStatement {
+					matched.Source = models.BillSourceStatement
+					updated, err := h.Bills.UpdateBill(r.Context(), matched.ID, matched)
+					if err != nil {
+						writeStoreError(w, err, "bill not found")
+						return
+					}
+					plannedBills[matchedIndex] = updated
+				}
+			}
+		}
 	}
 
 	if restoreInvoice && wallet != nil {
@@ -147,13 +217,14 @@ func (h *Statements) Import(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if wallet != nil && input.StatementType == "credit_card" && input.StatementBalance != nil {
+	if wallet != nil && input.StatementType == "credit_card" {
+		invoiceAmount := statementImportAmount(input)
 		if _, err := h.Wallets.ReconcileCardInvoice(
 			r.Context(),
 			wallet.ID,
 			*input.InvoiceYear,
 			*input.InvoiceMonth,
-			*input.StatementBalance,
+			invoiceAmount,
 			input.PeriodStart,
 			input.PeriodEnd,
 		); err != nil {
@@ -166,6 +237,90 @@ func (h *Statements) Import(w http.ResponseWriter, r *http.Request) {
 		Created: len(created),
 		Items:   created,
 	})
+}
+
+func cardBillMonth(input models.ImportStatementInput, wallet models.Wallet, item models.ImportStatementItem) (int, int) {
+	if input.InvoiceYear != nil && input.InvoiceMonth != nil && *input.InvoiceYear >= 2000 && *input.InvoiceMonth >= 1 && *input.InvoiceMonth <= 12 {
+		return *input.InvoiceYear, *input.InvoiceMonth
+	}
+	date := strings.TrimSpace(item.Date)
+	if len(date) >= 10 {
+		date = date[:10]
+	}
+	purchase, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		now := time.Now()
+		cycle := models.CardCycleForPurchase(wallet, now)
+		return cycle.Year, cycle.Month
+	}
+	cycle := models.CardCycleForPurchase(wallet, purchase)
+	return cycle.Year, cycle.Month
+}
+
+func itemYearMonth(item models.ImportStatementItem) (int, int) {
+	date := strings.TrimSpace(item.Date)
+	if len(date) >= 10 {
+		date = date[:10]
+	}
+	day, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		now := time.Now()
+		return now.Year(), int(now.Month())
+	}
+	return day.Year(), int(day.Month())
+}
+
+func statementBillForImport(item models.ImportStatementItem, wallet models.Wallet, memberID *int, year, month int) (models.Bill, bool) {
+	if item.Amount <= 0 || item.CategoryID < 1 {
+		return models.Bill{}, false
+	}
+	startMonth := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01")
+	name, current, total, installment := models.ParseInstallment(item.Description)
+	endMonth := startMonth
+	if installment {
+		endMonth, _ = models.AddMonthsToMonthKey(startMonth, total-current)
+	}
+	dueDay := 1
+	if wallet.DueDay != nil && *wallet.DueDay >= 1 && *wallet.DueDay <= 31 {
+		dueDay = *wallet.DueDay
+	}
+	members := []int{}
+	if memberID != nil && *memberID > 0 {
+		members = append(members, *memberID)
+	}
+	walletID := wallet.ID
+	return models.Bill{
+		Name:             name,
+		Amount:           math.Round(item.Amount*100) / 100,
+		AmountMode:       models.BillAmountModeFixed,
+		CategoryID:       item.CategoryID,
+		MemberIDs:        members,
+		WalletID:         &walletID,
+		DueDay:           dueDay,
+		Frequency:        models.BillFrequencyMonthly,
+		Recurrence:       models.BillRecurrenceUntil,
+		StartMonth:       startMonth,
+		EndMonth:         &endMonth,
+		Source:           models.BillSourceStatement,
+		InstallmentStart: current,
+		InstallmentTotal: total,
+	}, true
+}
+
+func statementImportAmount(input models.ImportStatementInput) float64 {
+	if input.StatementBalance != nil {
+		return math.Abs(*input.StatementBalance)
+	}
+	amount := 0.0
+	for _, item := range input.Items {
+		txType := strings.ToLower(strings.TrimSpace(item.Type))
+		if txType == models.TransactionTypeIncome {
+			amount -= item.Amount
+		} else {
+			amount += item.Amount
+		}
+	}
+	return math.Max(0, math.Round(amount*100)/100)
 }
 
 func (h *Statements) resolveCreditStatementWallet(

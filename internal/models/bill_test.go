@@ -120,3 +120,25 @@ func TestOccurrencesWeekdaysAndYearly(t *testing.T) {
 		t.Fatal("yearly should be inactive in September")
 	}
 }
+
+func TestParseInstallmentAndLastMonth(t *testing.T) {
+	name, current, total, ok := ParseInstallment("Notebook - parcela 1/3")
+	if !ok || name != "Notebook" || current != 1 || total != 3 {
+		t.Fatalf("parsed = %q %d/%d ok=%v", name, current, total, ok)
+	}
+	last, ok := AddMonthsToMonthKey("2026-12", total-current)
+	if !ok || last != "2027-02" {
+		t.Fatalf("last month = %q ok=%v, want 2027-02", last, ok)
+	}
+
+	name, current, total, ok = ParseInstallment("Amazon 1 de 3")
+	if !ok || name != "Amazon" || current != 1 || total != 3 {
+		t.Fatalf("parsed de = %q %d/%d ok=%v", name, current, total, ok)
+	}
+}
+
+func TestParseInstallmentRejectsDateLikeText(t *testing.T) {
+	if _, _, _, ok := ParseInstallment("Compra de 10/2026"); ok {
+		t.Fatal("year-like value must not be treated as an installment")
+	}
+}

@@ -30,10 +30,12 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 	const query = `
 		INSERT INTO bills (
 			name, amount, amount_mode, interest_rate, category_id, member_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at, wallet_id
-		) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+			recurrence, start_month, end_month, notes, created_at, wallet_id,
+			source, installment_start, installment_total
+		) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at, wallet_id
+			recurrence, start_month, end_month, notes, created_at, wallet_id,
+			source, installment_start, installment_total
 	`
 
 	now := formatDateTime(time.Now())
@@ -59,6 +61,9 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 		strings.TrimSpace(bill.Notes),
 		now,
 		nullInt(bill.WalletID),
+		normalizeBillSource(bill.Source),
+		bill.InstallmentStart,
+		bill.InstallmentTotal,
 	).Scan(
 		&created.ID,
 		&created.Name,
@@ -74,6 +79,9 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 		&created.Notes,
 		&createdAt,
 		&walletID,
+		&created.Source,
+		&created.InstallmentStart,
+		&created.InstallmentTotal,
 	)
 	if err != nil {
 		return models.Bill{}, fmt.Errorf("create bill: %w", err)
@@ -104,7 +112,8 @@ func (s *Store) CreateBill(ctx context.Context, bill models.Bill) (models.Bill, 
 func (s *Store) ListBills(ctx context.Context) ([]models.Bill, error) {
 	const query = `
 		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at, wallet_id
+			recurrence, start_month, end_month, notes, created_at, wallet_id,
+			source, installment_start, installment_total
 		FROM bills
 		ORDER BY due_day ASC, name ASC
 	`
@@ -130,7 +139,8 @@ func (s *Store) ListBillsActiveInMonth(ctx context.Context, year, month int) ([]
 func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 	const query = `
 		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at, wallet_id
+			recurrence, start_month, end_month, notes, created_at, wallet_id,
+			source, installment_start, installment_total
 		FROM bills
 		WHERE id = ?
 	`
@@ -156,6 +166,9 @@ func (s *Store) GetBillByID(ctx context.Context, id int) (models.Bill, error) {
 		&bill.Notes,
 		&createdAt,
 		&walletID,
+		&bill.Source,
+		&bill.InstallmentStart,
+		&bill.InstallmentTotal,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.Bill{}, ErrNotFound
@@ -201,10 +214,12 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 	const query = `
 		UPDATE bills
 		SET name = ?, amount = ?, amount_mode = ?, interest_rate = ?, category_id = ?, member_id = NULL, due_day = ?,
-			frequency = ?, recurrence = ?, start_month = ?, end_month = ?, notes = ?, wallet_id = ?
+			frequency = ?, recurrence = ?, start_month = ?, end_month = ?, notes = ?, wallet_id = ?,
+			source = ?, installment_start = ?, installment_total = ?
 		WHERE id = ?
 		RETURNING id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at, wallet_id
+			recurrence, start_month, end_month, notes, created_at, wallet_id,
+			source, installment_start, installment_total
 	`
 
 	var (
@@ -228,6 +243,9 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 		nullString(bill.EndMonth),
 		strings.TrimSpace(bill.Notes),
 		nullInt(bill.WalletID),
+		normalizeBillSource(bill.Source),
+		bill.InstallmentStart,
+		bill.InstallmentTotal,
 		id,
 	).Scan(
 		&updated.ID,
@@ -244,6 +262,9 @@ func (s *Store) UpdateBill(ctx context.Context, id int, bill models.Bill) (model
 		&updated.Notes,
 		&createdAt,
 		&walletID,
+		&updated.Source,
+		&updated.InstallmentStart,
+		&updated.InstallmentTotal,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.Bill{}, ErrNotFound
@@ -321,6 +342,9 @@ func (s *Store) scanBills(ctx context.Context, query string, args ...any) ([]mod
 			&bill.Notes,
 			&createdAt,
 			&walletID,
+			&bill.Source,
+			&bill.InstallmentStart,
+			&bill.InstallmentTotal,
 		); err != nil {
 			return nil, fmt.Errorf("scan bill: %w", err)
 		}
@@ -348,6 +372,13 @@ func (s *Store) scanBills(ctx context.Context, query string, args ...any) ([]mod
 		items[i].MemberIDs = members
 	}
 	return items, nil
+}
+
+func normalizeBillSource(value string) string {
+	if value == models.BillSourceStatement {
+		return models.BillSourceStatement
+	}
+	return models.BillSourceManual
 }
 
 func (s *Store) listBillMemberIDs(ctx context.Context, billID int) ([]int, error) {

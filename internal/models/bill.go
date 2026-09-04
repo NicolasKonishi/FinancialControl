@@ -2,6 +2,9 @@ package models
 
 import (
 	"math"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,57 +24,73 @@ const (
 	BillFrequencyYearly   = "yearly"
 )
 
+const (
+	BillSourceManual    = "manual"
+	BillSourceStatement = "statement"
+)
+
+var installmentRe = regexp.MustCompile(`(?i)(?:parcela\s*)?(\d{1,3})\s*(?:/|de)\s*(\d{1,3})\b`)
+
 // Amount is the base charge when fixed, or the 1st month value when amount_mode is interest.
 type Bill struct {
-	ID           int       `json:"id"`
-	Name         string    `json:"name"`
-	Amount       float64   `json:"amount"`
-	AmountMode   string    `json:"amount_mode"`
-	InterestRate float64   `json:"interest_rate"`
-	CategoryID   int       `json:"category_id"`
-	MemberIDs    []int     `json:"member_ids"`
-	WalletID     *int      `json:"wallet_id"`
-	DueDay       int       `json:"due_day"`
-	Frequency    string    `json:"frequency"`
-	Recurrence   string    `json:"recurrence"`
-	StartMonth   string    `json:"start_month"`
-	EndMonth     *string   `json:"end_month,omitempty"`
-	Notes        string    `json:"notes,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID               int       `json:"id"`
+	Name             string    `json:"name"`
+	Amount           float64   `json:"amount"`
+	AmountMode       string    `json:"amount_mode"`
+	InterestRate     float64   `json:"interest_rate"`
+	CategoryID       int       `json:"category_id"`
+	MemberIDs        []int     `json:"member_ids"`
+	WalletID         *int      `json:"wallet_id"`
+	DueDay           int       `json:"due_day"`
+	Frequency        string    `json:"frequency"`
+	Recurrence       string    `json:"recurrence"`
+	StartMonth       string    `json:"start_month"`
+	EndMonth         *string   `json:"end_month,omitempty"`
+	Notes            string    `json:"notes,omitempty"`
+	Source           string    `json:"source"`
+	InstallmentStart int       `json:"installment_start,omitempty"`
+	InstallmentTotal int       `json:"installment_total,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // CreateBillInput is the JSON body for POST /bills.
 type CreateBillInput struct {
-	Name         string  `json:"name"`
-	Amount       float64 `json:"amount"`
-	AmountMode   string  `json:"amount_mode"`
-	InterestRate float64 `json:"interest_rate"`
-	CategoryID   int     `json:"category_id"`
-	MemberIDs    []int   `json:"member_ids"`
-	WalletID     *int    `json:"wallet_id"`
-	DueDay       int     `json:"due_day"`
-	Frequency    string  `json:"frequency"`
-	Recurrence   string  `json:"recurrence"`
-	StartMonth   string  `json:"start_month"`
-	EndMonth     *string `json:"end_month"`
-	Notes        string  `json:"notes"`
+	Name             string  `json:"name"`
+	Amount           float64 `json:"amount"`
+	AmountMode       string  `json:"amount_mode"`
+	InterestRate     float64 `json:"interest_rate"`
+	CategoryID       int     `json:"category_id"`
+	MemberIDs        []int   `json:"member_ids"`
+	WalletID         *int    `json:"wallet_id"`
+	DueDay           int     `json:"due_day"`
+	Frequency        string  `json:"frequency"`
+	Recurrence       string  `json:"recurrence"`
+	StartMonth       string  `json:"start_month"`
+	EndMonth         *string `json:"end_month"`
+	Notes            string  `json:"notes"`
+	Source           string  `json:"source"`
+	InstallmentStart int     `json:"installment_start"`
+	InstallmentTotal int     `json:"installment_total"`
 }
 
 // UpdateBillInput is the JSON body for PUT /bills/{id}.
 type UpdateBillInput struct {
-	Name         string  `json:"name"`
-	Amount       float64 `json:"amount"`
-	AmountMode   string  `json:"amount_mode"`
-	InterestRate float64 `json:"interest_rate"`
-	CategoryID   int     `json:"category_id"`
-	MemberIDs    []int   `json:"member_ids"`
-	WalletID     *int    `json:"wallet_id"`
-	DueDay       int     `json:"due_day"`
-	Frequency    string  `json:"frequency"`
-	Recurrence   string  `json:"recurrence"`
-	StartMonth   string  `json:"start_month"`
-	EndMonth     *string `json:"end_month"`
-	Notes        string  `json:"notes"`
+	Name             string  `json:"name"`
+	Amount           float64 `json:"amount"`
+	AmountMode       string  `json:"amount_mode"`
+	InterestRate     float64 `json:"interest_rate"`
+	CategoryID       int     `json:"category_id"`
+	MemberIDs        []int   `json:"member_ids"`
+	WalletID         *int    `json:"wallet_id"`
+	DueDay           int     `json:"due_day"`
+	Frequency        string  `json:"frequency"`
+	Recurrence       string  `json:"recurrence"`
+	StartMonth       string  `json:"start_month"`
+	EndMonth         *string `json:"end_month"`
+	Notes            string  `json:"notes"`
+	Source           string  `json:"source"`
+	InstallmentStart int     `json:"installment_start"`
+	InstallmentTotal int     `json:"installment_total"`
 }
 
 // ValidBillFrequency reports whether frequency is supported.
@@ -91,6 +110,36 @@ func NormalizeFrequency(value string) string {
 		return BillFrequencyMonthly
 	}
 	return value
+}
+
+// ParseInstallment recognizes descriptions such as "Notebook 1/3" and returns
+// the clean purchase name plus the current and total installment numbers.
+func ParseInstallment(value string) (string, int, int, bool) {
+	match := installmentRe.FindStringSubmatchIndex(value)
+	if match == nil {
+		return strings.TrimSpace(value), 0, 0, false
+	}
+	current, currentErr := strconv.Atoi(value[match[2]:match[3]])
+	total, totalErr := strconv.Atoi(value[match[4]:match[5]])
+	if currentErr != nil || totalErr != nil || current < 1 || total < current || total > 120 {
+		return strings.TrimSpace(value), 0, 0, false
+	}
+	name := strings.TrimSpace(value[:match[0]] + " " + value[match[1]:])
+	name = strings.Trim(name, " -–—·()[]")
+	name = strings.Join(strings.Fields(name), " ")
+	if name == "" {
+		name = strings.TrimSpace(value)
+	}
+	return name, current, total, true
+}
+
+// AddMonthsToMonthKey shifts a YYYY-MM competence by delta months.
+func AddMonthsToMonthKey(value string, delta int) (string, bool) {
+	month, err := time.Parse("2006-01", value)
+	if err != nil {
+		return "", false
+	}
+	return month.AddDate(0, delta, 0).Format("2006-01"), true
 }
 
 // IsActiveInMonth reports whether the bill has at least one charge in year/month.

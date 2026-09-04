@@ -11,6 +11,7 @@ type Props = {
   value: string
   minMonth: string
   onChange: (monthKey: string) => void
+  label?: string
 }
 
 function currentMonthKey() {
@@ -18,7 +19,7 @@ function currentMonthKey() {
   return monthKey(now.getFullYear(), now.getMonth() + 1)
 }
 
-export function BillEndMonthPicker({ value, minMonth, onChange }: Props) {
+export function BillEndMonthPicker({ value, minMonth, onChange, label = 'Termina em' }: Props) {
   const selected = parseMonthKey(value || minMonth)
   const [open, setOpen] = useState(false)
   const [viewYear, setViewYear] = useState(selected.year)
@@ -60,12 +61,12 @@ export function BillEndMonthPicker({ value, minMonth, onChange }: Props) {
           <rect x="4" y="5" width="16" height="15" rx="2" />
           <path d="M8 3v4M16 3v4M4 10h16" />
         </svg>
-        <span>Termina em</span>
+        <span>{label}</span>
         <small>{monthKeyLabel(value)}</small>
       </button>
 
       {open ? (
-        <div className="bill-calendar bill-end-month-panel" role="dialog" aria-label="Mês final">
+        <div className="bill-calendar bill-end-month-panel" role="dialog" aria-label={label}>
           <header className="bill-calendar-head">
             <span className="bill-calendar-title">{viewYear}</span>
             <div className="bill-calendar-nav">

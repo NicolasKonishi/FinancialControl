@@ -27,6 +27,43 @@ func TestCardCycleClosing14Due21(t *testing.T) {
 	}
 }
 
+func TestApplyPlannedCardBillsRebuildsCalculatedInvoice(t *testing.T) {
+	walletID := 10
+	end := "2026-12"
+	bills := []models.Bill{
+		{
+			Name: "Mercadolivre", Amount: 381.26, WalletID: &walletID, DueDay: 21,
+			Frequency: models.BillFrequencyMonthly, Recurrence: models.BillRecurrenceUntil,
+			StartMonth: "2026-10", EndMonth: &end, Source: models.BillSourceStatement,
+		},
+		{
+			Name: "NU Plus", Amount: 29, WalletID: &walletID, DueDay: 21,
+			Frequency: models.BillFrequencyMonthly, Recurrence: models.BillRecurrenceOngoing,
+			StartMonth: "2026-09", Source: models.BillSourceManual,
+		},
+	}
+	calculated := models.ApplyPlannedCardBills(models.CardInvoice{
+		WalletID: walletID, Year: 2026, Month: 11, Amount: 381.26, Source: "calculated",
+	}, bills)
+	if calculated.Amount != 410.26 {
+		t.Fatalf("november forecast = %v, want 410.26", calculated.Amount)
+	}
+
+	legacy := models.ApplyPlannedCardBills(models.CardInvoice{
+		WalletID: walletID, Year: 2026, Month: 11, Amount: 200, Source: "calculated",
+	}, nil)
+	if legacy.Amount != 200 {
+		t.Fatalf("calculated invoice without bills should keep stored amount, got %v", legacy.Amount)
+	}
+
+	statement := models.ApplyPlannedCardBills(models.CardInvoice{
+		WalletID: walletID, Year: 2026, Month: 10, Amount: 456.26, Source: "statement",
+	}, bills)
+	if statement.Amount != 485.26 {
+		t.Fatalf("october statement should add manual NU Plus: got %v, want 485.26", statement.Amount)
+	}
+}
+
 func TestCardCycleDueBeforeClosing(t *testing.T) {
 	closing, due := 25, 5
 	wallet := models.Wallet{ClosingDay: &closing, DueDay: &due}

@@ -33,7 +33,7 @@ func TestBuildPreviewMarksExistingPurchases(t *testing.T) {
 		{ID: 3, Name: "Outro", Icon: "other"},
 	}
 
-	preview := statement.BuildPreview(parsed, existing, cats, &walletID, nil)
+	preview := statement.BuildPreview(parsed, existing, cats, &walletID, nil, nil)
 	if preview.NewCount != 1 {
 		t.Fatalf("new_count = %d, want 1", preview.NewCount)
 	}
@@ -67,7 +67,7 @@ func TestBuildPreviewSelectsIncomeAndSkipsTransfer(t *testing.T) {
 		{ID: 8, Name: "Salário", Icon: "salary"},
 		{ID: 3, Name: "Outro", Icon: "other"},
 	}
-	preview := statement.BuildPreview(parsed, nil, cats, nil, nil)
+	preview := statement.BuildPreview(parsed, nil, cats, nil, nil, nil)
 	if preview.NewCount != 2 {
 		t.Fatalf("new_count = %d, want 2", preview.NewCount)
 	}
@@ -82,6 +82,65 @@ func TestBuildPreviewSelectsIncomeAndSkipsTransfer(t *testing.T) {
 	}
 	if !preview.Items[2].Selected {
 		t.Fatalf("debit purchase should be selected: %+v", preview.Items[2])
+	}
+}
+
+func TestBuildPreviewMarksPlannedBills(t *testing.T) {
+	checking := 4
+	card := 10
+	cats := []models.Category{{ID: 3, Name: "Outro", Icon: "other"}}
+	bills := []models.Bill{
+		{
+			ID: 1, Name: "Internet", Amount: 100, WalletID: &checking, DueDay: 10,
+			Frequency: models.BillFrequencyMonthly, Recurrence: models.BillRecurrenceOngoing,
+			StartMonth: "2026-01", Source: models.BillSourceManual,
+		},
+		{
+			ID: 2, Name: "Nu Seguro Celular", Amount: 12.9, WalletID: &card, DueDay: 21,
+			Frequency: models.BillFrequencyMonthly, Recurrence: models.BillRecurrenceOngoing,
+			StartMonth: "2026-09", Source: models.BillSourceManual,
+		},
+	}
+
+	debit := statement.BuildPreview(models.ParsedStatement{
+		Issuer: "nubank", StatementType: "account",
+		Items: []models.ParsedStatementItem{
+			{Date: "2026-09-10", Description: "INTERNET CLARO", Amount: 100, Kind: "expense", SuggestedIcon: "other"},
+			{Date: "2026-09-11", Description: "PADARIA", Amount: 18, Kind: "expense", SuggestedIcon: "other"},
+		},
+	}, nil, cats, &checking, nil, bills)
+	if !debit.Items[0].AlreadyRecorded || debit.Items[0].Selected || debit.Items[0].MatchedBillID == nil {
+		t.Fatalf("debit bill match should be unselected: %+v", debit.Items[0])
+	}
+	if !debit.Items[1].Selected {
+		t.Fatalf("unrelated debit purchase should stay selected: %+v", debit.Items[1])
+	}
+
+	credit := statement.BuildPreview(models.ParsedStatement{
+		Issuer: "nubank", StatementType: "credit_card",
+		Items: []models.ParsedStatementItem{
+			{Date: "2026-09-20", Description: "NU SEGURO CELULAR *NUBANK", Amount: 12.9, Kind: "expense", SuggestedIcon: "other"},
+		},
+	}, nil, cats, &card, nil, bills)
+	if credit.Items[0].AlreadyRecorded || !credit.Items[0].Selected || credit.Items[0].MatchedBillID == nil {
+		t.Fatalf("credit bill match should stay selected to confirm the invoice: %+v", credit.Items[0])
+	}
+}
+
+func TestMatchingBillFuzzyNameKeepsOngoing(t *testing.T) {
+	card := 10
+	bills := []models.Bill{
+		{
+			ID: 7, Name: "Nu Seguro Celular", Amount: 12.9, WalletID: &card, DueDay: 21,
+			Frequency: models.BillFrequencyMonthly, Recurrence: models.BillRecurrenceOngoing,
+			StartMonth: "2026-09", Source: models.BillSourceManual, InstallmentTotal: 0,
+		},
+	}
+	candidate := statement.BillCandidate("NU SEGURO CELULAR *NUBANK", 12.9, &card)
+	used := map[int]bool{}
+	idx := statement.MatchingBill(bills, candidate, 2026, 10, used, false)
+	if idx != 0 {
+		t.Fatalf("expected fuzzy match of manual subscription, got %d", idx)
 	}
 }
 

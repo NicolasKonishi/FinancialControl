@@ -94,6 +94,106 @@ function monthsSinceStart(startMonth: string, year: number, month: number) {
   return target - start
 }
 
+export function installmentFromDescription(value: string) {
+  const match = value.match(/(?:parcela\s*)?(\d{1,3})\s*(?:\/|de)\s*(\d{1,3})\b/i)
+  if (!match) return null
+  const current = Number(match[1])
+  const total = Number(match[2])
+  if (current < 1 || total < current || total > 120) return null
+  return { current, total }
+}
+
+export function addMonthsToMonthKey(value: string, delta: number) {
+  const [year, month] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year || 2000, (month || 1) - 1 + delta, 1))
+  return billMonthKey(date.getUTCFullYear(), date.getUTCMonth() + 1)
+}
+
+function cardDay(value: number | null | undefined, fallback: number) {
+  if (!value || value < 1 || value > 31) return fallback
+  return value
+}
+
+/** Invoice due-month (YYYY-MM) that a purchase on `at` belongs to. */
+export function cardInvoiceMonthKey(
+  wallet: { closing_day?: number | null; due_day?: number | null },
+  at = new Date(),
+) {
+  const closingDay = cardDay(wallet.closing_day, 1)
+  const dueDay = cardDay(wallet.due_day, closingDay)
+  let closingYear = at.getFullYear()
+  let closingMonth = at.getMonth() + 1
+  if (at.getDate() >= closingDay) {
+    const next = addMonthsToMonthKey(billMonthKey(closingYear, closingMonth), 1)
+    const [year, month] = next.split('-').map(Number)
+    closingYear = year
+    closingMonth = month
+  }
+  if (dueDay <= closingDay) {
+    return addMonthsToMonthKey(billMonthKey(closingYear, closingMonth), 1)
+  }
+  return billMonthKey(closingYear, closingMonth)
+}
+
+export function stripInstallmentLabel(value: string) {
+  const cleaned = value
+    .replace(/\s*(?:parcela\s*)?\d{1,3}\s*(?:\/|de)\s*\d{1,3}\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned || value.trim()
+}
+
+export function normalizeBillName(value: string) {
+  return stripInstallmentLabel(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+export function namesOverlap(a: string, b: string) {
+  const left = normalizeBillName(a)
+  const right = normalizeBillName(b)
+  if (!left || !right) return false
+  if (left === right) return true
+  if (left.includes(right) || right.includes(left)) return true
+  const aTokens = left.split(/\s+/).filter(Boolean)
+  const bTokens = right.split(/\s+/).filter(Boolean)
+  if (aTokens.length === 0 || bTokens.length === 0) return false
+  const bSet = new Set(bTokens)
+  const overlap = aTokens.filter((token) => bSet.has(token)).length
+  const smaller = Math.min(aTokens.length, bTokens.length)
+  return overlap > 0 && overlap * 2 >= smaller
+}
+
+export function cardBillMatchesTx(bill: Bill, tx: { description: string; amount: number; wallet_id?: number | null }) {
+  if (bill.wallet_id && tx.wallet_id && bill.wallet_id !== tx.wallet_id) return false
+  if (Math.abs(bill.amount - tx.amount) > 0.009) return false
+  return namesOverlap(bill.name, tx.description)
+}
+
+export function transactionInStatementPeriod(
+  tx: { date: string },
+  invoice: { statement_period_start?: string | null; statement_period_end?: string | null },
+) {
+  const day = tx.date.slice(0, 10)
+  const start = invoice.statement_period_start?.slice(0, 10)
+  const end = invoice.statement_period_end?.slice(0, 10)
+  if (!start || !end) return false
+  return day >= start && day < end
+}
+
+export function billInstallmentPosition(bill: Bill, year: number, month: number) {
+  const first = bill.installment_start ?? 0
+  const total = bill.installment_total ?? 0
+  const elapsed = monthsSinceStart(bill.start_month, year, month)
+  if (first < 1 || total < first || elapsed == null) return null
+  const current = first + elapsed
+  if (current > total) return null
+  return { current, total, remaining: total - current }
+}
+
 export function billOccurrencesInMonth(bill: Bill, year: number, month: number) {
   const anchor = anchorDate(bill)
   if (!anchor) return 0

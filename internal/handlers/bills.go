@@ -84,19 +84,22 @@ func (h *Bills) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bill, ok := h.buildFromInput(w, r, models.CreateBillInput{
-		Name:         input.Name,
-		Amount:       input.Amount,
-		AmountMode:   input.AmountMode,
-		InterestRate: input.InterestRate,
-		CategoryID:   input.CategoryID,
-		MemberIDs:    input.MemberIDs,
-		WalletID:     input.WalletID,
-		DueDay:       input.DueDay,
-		Frequency:    input.Frequency,
-		Recurrence:   input.Recurrence,
-		StartMonth:   input.StartMonth,
-		EndMonth:     input.EndMonth,
-		Notes:        input.Notes,
+		Name:             input.Name,
+		Amount:           input.Amount,
+		AmountMode:       input.AmountMode,
+		InterestRate:     input.InterestRate,
+		CategoryID:       input.CategoryID,
+		MemberIDs:        input.MemberIDs,
+		WalletID:         input.WalletID,
+		DueDay:           input.DueDay,
+		Frequency:        input.Frequency,
+		Recurrence:       input.Recurrence,
+		StartMonth:       input.StartMonth,
+		EndMonth:         input.EndMonth,
+		Notes:            input.Notes,
+		Source:           input.Source,
+		InstallmentStart: input.InstallmentStart,
+		InstallmentTotal: input.InstallmentTotal,
 	})
 	if !ok {
 		return
@@ -212,6 +215,7 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 	}
 
 	walletID := input.WalletID
+	var selectedWallet *models.Wallet
 	if isCardCategory(category.Name) && h.Wallets != nil {
 		wallets, err := h.Wallets.ListWallets(r.Context())
 		if err != nil {
@@ -236,21 +240,65 @@ func (h *Bills) buildFromInput(w http.ResponseWriter, r *http.Request, input mod
 			walletID = cardWalletID
 		}
 	}
+	if walletID != nil && h.Wallets != nil {
+		wallets, err := h.Wallets.ListWallets(r.Context())
+		if err != nil {
+			writeStoreError(w, err, "wallet not found")
+			return models.Bill{}, false
+		}
+		for i := range wallets {
+			if wallets[i].ID == *walletID {
+				selectedWallet = &wallets[i]
+				break
+			}
+		}
+	}
+
+	name := strings.TrimSpace(input.Name)
+	installmentStart := input.InstallmentStart
+	installmentTotal := input.InstallmentTotal
+	if selectedWallet != nil && models.IsCredit(selectedWallet.Kind) {
+		if cleanName, current, total, found := models.ParseInstallment(name); found {
+			name = cleanName
+			installmentStart = current
+			installmentTotal = total
+		}
+		if installmentStart > 0 && installmentTotal >= installmentStart {
+			frequency = models.BillFrequencyMonthly
+			recurrence = models.BillRecurrenceUntil
+			lastMonth, valid := models.AddMonthsToMonthKey(input.StartMonth, installmentTotal-installmentStart)
+			if valid {
+				normalizedEnd = &lastMonth
+			}
+		}
+	}
+	if installmentStart < 0 || installmentTotal < installmentStart || installmentTotal > 120 {
+		http.Error(w, "invalid installment", http.StatusBadRequest)
+		return models.Bill{}, false
+	}
+
+	source := strings.ToLower(strings.TrimSpace(input.Source))
+	if source != models.BillSourceStatement {
+		source = models.BillSourceManual
+	}
 
 	return models.Bill{
-		Name:         strings.TrimSpace(input.Name),
-		Amount:       amount,
-		AmountMode:   amountMode,
-		InterestRate: interestRate,
-		CategoryID:   input.CategoryID,
-		MemberIDs:    memberIDs,
-		WalletID:     walletID,
-		DueDay:       input.DueDay,
-		Frequency:    frequency,
-		Recurrence:   recurrence,
-		StartMonth:   input.StartMonth,
-		EndMonth:     normalizedEnd,
-		Notes:        strings.TrimSpace(input.Notes),
+		Name:             name,
+		Amount:           amount,
+		AmountMode:       amountMode,
+		InterestRate:     interestRate,
+		CategoryID:       input.CategoryID,
+		MemberIDs:        memberIDs,
+		WalletID:         walletID,
+		DueDay:           input.DueDay,
+		Frequency:        frequency,
+		Recurrence:       recurrence,
+		StartMonth:       input.StartMonth,
+		EndMonth:         normalizedEnd,
+		Notes:            strings.TrimSpace(input.Notes),
+		Source:           source,
+		InstallmentStart: installmentStart,
+		InstallmentTotal: installmentTotal,
 	}, true
 }
 

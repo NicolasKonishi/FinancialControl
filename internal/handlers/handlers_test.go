@@ -993,6 +993,36 @@ func TestCardCategoryBillAutomaticallyUsesCreditCard(t *testing.T) {
 	}
 }
 
+func TestCardBillExpandsInstallmentsFromDescription(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Compras", Icon: "shopping"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Nubank", Kind: models.WalletCredit, MemberID: &member.ID, ClosingDay: &closing, DueDay: &due,
+	})
+	h := &handlers.Bills{Store: store, Categories: store, Members: store, Wallets: store}
+	req := httptest.NewRequest(http.MethodPost, "/bills", strings.NewReader(fmt.Sprintf(
+		`{"name":"Notebook 1/3","amount":350,"category_id":%d,"wallet_id":%d,"due_day":21,"frequency":"monthly","recurrence":"until","start_month":"2026-12","end_month":"2026-12","member_ids":[%d]}`,
+		category.ID, card.ID, member.ID,
+	)))
+	rec := httptest.NewRecorder()
+	h.ListOrCreate(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var bill models.Bill
+	if err := json.NewDecoder(rec.Body).Decode(&bill); err != nil {
+		t.Fatal(err)
+	}
+	if bill.Name != "Notebook" || bill.InstallmentStart != 1 || bill.InstallmentTotal != 3 {
+		t.Fatalf("bill installment = %+v", bill)
+	}
+	if bill.EndMonth == nil || *bill.EndMonth != "2027-02" {
+		t.Fatalf("end_month = %v, want 2027-02", bill.EndMonth)
+	}
+}
+
 func TestBillPaidChecklist(t *testing.T) {
 	store := newMemoryStore()
 	_, _ = store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})
@@ -1373,6 +1403,202 @@ func TestStatementPreviewAndImport(t *testing.T) {
 	}
 	if len(txs) != 2 {
 		t.Fatalf("transactions after import = %d, want 2", len(txs))
+	}
+}
+
+func TestCreditStatementCreatesOneInstallmentSeries(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Compras", Icon: "shopping"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Nubank", Kind: models.WalletCredit, MemberID: &member.ID, ClosingDay: &closing, DueDay: &due,
+	})
+	h := &handlers.Statements{
+		Transactions: store, Categories: store, Members: store, Wallets: store, Bills: store,
+	}
+
+	importInstallment := func(invoiceMonth, current int) {
+		body := fmt.Sprintf(
+			`{"wallet_id":%d,"member_id":%d,"statement_type":"credit_card","invoice_year":2026,"invoice_month":%d,"items":[{"date":"2026-%02d-05","description":"LOJA TESTE %d/3","amount":100,"type":"expense","category_id":%d}]}`,
+			card.ID, member.ID, invoiceMonth, invoiceMonth, current, category.ID,
+		)
+		req := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.Import(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("installment %d import status = %d body=%s", current, rec.Code, rec.Body.String())
+		}
+	}
+
+	importInstallment(8, 1)
+	bills, _ := store.ListBills(context.Background())
+	if len(bills) != 1 || bills[0].Source != models.BillSourceStatement {
+		t.Fatalf("bills after first import = %+v", bills)
+	}
+	if bills[0].EndMonth == nil || *bills[0].EndMonth != "2026-10" {
+		t.Fatalf("installment end = %v, want 2026-10", bills[0].EndMonth)
+	}
+	if !bills[0].IsActiveInMonth(2026, 9) || !bills[0].IsActiveInMonth(2026, 10) {
+		t.Fatalf("installment series should remain active in later invoices: %+v", bills[0])
+	}
+
+	importInstallment(9, 2)
+	bills, _ = store.ListBills(context.Background())
+	if len(bills) != 1 {
+		t.Fatalf("second statement duplicated installment series: %+v", bills)
+	}
+}
+
+func TestCreditStatementCreatesBillRowsForPurchases(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Compras", Icon: "shopping"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Nubank", Kind: models.WalletCredit, MemberID: &member.ID, ClosingDay: &closing, DueDay: &due,
+	})
+	h := &handlers.Statements{
+		Transactions: store, Categories: store, Members: store, Wallets: store, Bills: store,
+	}
+
+	body := fmt.Sprintf(
+		`{"wallet_id":%d,"member_id":%d,"statement_type":"credit_card","invoice_year":2026,"invoice_month":9,"items":[{"date":"2026-08-20","description":"IFOOD","amount":42.9,"type":"expense","category_id":%d},{"date":"2026-08-21","description":"IFOOD","amount":42.9,"type":"expense","category_id":%d},{"date":"2026-08-22","description":"NOTEBOOK 1/3","amount":350,"type":"expense","category_id":%d}]}`,
+		card.ID, member.ID, category.ID, category.ID, category.ID,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Import(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	bills, _ := store.ListBills(context.Background())
+	if len(bills) != 3 {
+		t.Fatalf("bills = %+v, want 3 credit-card purchases", bills)
+	}
+	var installment *models.Bill
+	for i := range bills {
+		if bills[i].InstallmentTotal == 3 {
+			installment = &bills[i]
+		}
+		if !bills[i].IsActiveInMonth(2026, 9) {
+			t.Fatalf("purchase %q missing from September invoice", bills[i].Name)
+		}
+	}
+	if installment == nil || installment.EndMonth == nil || *installment.EndMonth != "2026-11" {
+		t.Fatalf("notebook installment = %+v", installment)
+	}
+}
+
+func TestCreditWalletAccountImportCreatesBills(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Comida", Icon: "food"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Nubank", Kind: models.WalletCredit, MemberID: &member.ID, ClosingDay: &closing, DueDay: &due,
+	})
+	h := &handlers.Statements{
+		Transactions: store, Categories: store, Members: store, Wallets: store, Bills: store,
+	}
+
+	body := fmt.Sprintf(
+		`{"wallet_id":%d,"member_id":%d,"items":[{"date":"2026-09-03","description":"UBER TRIP","amount":18.5,"type":"expense","category_id":%d}]}`,
+		card.ID, member.ID, category.ID,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Import(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	bills, _ := store.ListBills(context.Background())
+	if len(bills) != 1 || bills[0].Name != "UBER TRIP" || bills[0].Source != models.BillSourceStatement {
+		t.Fatalf("account import onto credit wallet bills = %+v", bills)
+	}
+}
+
+func TestCreditImportMatchesManualSubscription(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Outro", Icon: "other"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	closing, due := 14, 21
+	card, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Nubank", Kind: models.WalletCredit, MemberID: &member.ID, ClosingDay: &closing, DueDay: &due,
+	})
+	_, err := store.CreateBill(context.Background(), models.Bill{
+		Name: "Nu Seguro Celular", Amount: 12.90, CategoryID: category.ID, MemberIDs: []int{member.ID},
+		WalletID: &card.ID, DueDay: 21, Frequency: models.BillFrequencyMonthly,
+		Recurrence: models.BillRecurrenceOngoing, StartMonth: "2026-09", Source: models.BillSourceManual,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers.Statements{
+		Transactions: store, Categories: store, Members: store, Wallets: store, Bills: store,
+	}
+
+	body := fmt.Sprintf(
+		`{"wallet_id":%d,"member_id":%d,"statement_type":"credit_card","invoice_year":2026,"invoice_month":10,"items":[{"date":"2026-09-20","description":"NU SEGURO CELULAR *NUBANK","amount":12.9,"type":"expense","category_id":%d}]}`,
+		card.ID, member.ID, category.ID,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Import(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	bills, _ := store.ListBills(context.Background())
+	if len(bills) != 1 {
+		t.Fatalf("import duplicated manual subscription: %+v", bills)
+	}
+	if bills[0].Recurrence != models.BillRecurrenceOngoing {
+		t.Fatalf("matched subscription should stay ongoing: %+v", bills[0])
+	}
+	if bills[0].Source != models.BillSourceStatement {
+		t.Fatalf("matched subscription source = %q, want statement", bills[0].Source)
+	}
+}
+
+func TestDebitImportSkipsPlannedBill(t *testing.T) {
+	store := newMemoryStore()
+	category, _ := store.CreateCategory(context.Background(), models.CreateCategoryInput{Name: "Casa", Icon: "home"})
+	member, _ := store.CreateMember(context.Background(), models.CreateMemberInput{Name: "Ana"})
+	checking, _ := store.CreateWallet(context.Background(), models.CreateWalletInput{
+		Name: "Conta", Kind: models.WalletChecking, MemberID: &member.ID,
+	})
+	_, err := store.CreateBill(context.Background(), models.Bill{
+		Name: "Internet", Amount: 100, CategoryID: category.ID, MemberIDs: []int{member.ID},
+		WalletID: &checking.ID, DueDay: 10, Frequency: models.BillFrequencyMonthly,
+		Recurrence: models.BillRecurrenceOngoing, StartMonth: "2026-01", Source: models.BillSourceManual,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers.Statements{
+		Transactions: store, Categories: store, Members: store, Wallets: store, Bills: store,
+	}
+
+	body := fmt.Sprintf(
+		`{"wallet_id":%d,"member_id":%d,"items":[{"date":"2026-09-10","description":"CLARO INTERNET","amount":100,"type":"expense","category_id":%d}]}`,
+		checking.ID, member.ID, category.ID,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/statements/import", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Import(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	txs, _ := store.ListTransactions(context.Background())
+	if len(txs) != 0 {
+		t.Fatalf("debit import should not duplicate a planned bill as a transaction: %+v", txs)
+	}
+	bills, _ := store.ListBills(context.Background())
+	if len(bills) != 1 {
+		t.Fatalf("debit import should keep the original bill: %+v", bills)
 	}
 }
 

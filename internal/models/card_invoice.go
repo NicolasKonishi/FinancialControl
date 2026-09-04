@@ -62,6 +62,33 @@ func CardCycleForDueMonth(wallet Wallet, year, month int) CardCycle {
 	return CardCycle{Year: due.Year(), Month: int(due.Month()), ClosingDate: closing, DueDate: due}
 }
 
+// ApplyPlannedCardBills overlays forecast charges onto a credit-card invoice.
+// Statement invoices keep the imported total and add manual bills that have
+// not been confirmed by a statement yet (subscriptions the user knows will
+// land). Future (calculated) invoices are rebuilt from every bill that still
+// charges in that due month, so leftover transaction adjustments do not
+// inflate the forecast.
+func ApplyPlannedCardBills(invoice CardInvoice, bills []Bill) CardInvoice {
+	planned := 0.0
+	manual := 0.0
+	for _, bill := range bills {
+		if bill.WalletID == nil || *bill.WalletID != invoice.WalletID {
+			continue
+		}
+		charge := bill.ChargeForMonth(invoice.Year, invoice.Month)
+		planned += charge
+		if bill.Source != BillSourceStatement {
+			manual += charge
+		}
+	}
+	if invoice.Source == "statement" {
+		invoice.Amount = math.Round((invoice.Amount+manual)*100) / 100
+	} else if planned > 0 {
+		invoice.Amount = math.Round(planned*100) / 100
+	}
+	return FinalizeCardInvoice(invoice)
+}
+
 // FinalizeCardInvoice fills calculated fields before returning an invoice.
 func FinalizeCardInvoice(invoice CardInvoice) CardInvoice {
 	invoice.Amount = math.Round(invoice.Amount*100) / 100

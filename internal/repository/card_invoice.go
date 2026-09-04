@@ -203,20 +203,11 @@ func (s *Store) PayCardInvoice(ctx context.Context, creditWalletID int, input mo
 }
 
 func (s *Store) withPlannedCardBills(ctx context.Context, invoice models.CardInvoice) (models.CardInvoice, error) {
-	if invoice.Source == "statement" {
-		return models.FinalizeCardInvoice(invoice), nil
-	}
 	bills, err := s.ListBills(ctx)
 	if err != nil {
 		return models.CardInvoice{}, err
 	}
-	for _, bill := range bills {
-		if bill.WalletID == nil || *bill.WalletID != invoice.WalletID {
-			continue
-		}
-		invoice.Amount += bill.ChargeForMonth(invoice.Year, invoice.Month)
-	}
-	return models.FinalizeCardInvoice(invoice), nil
+	return models.ApplyPlannedCardBills(invoice, bills), nil
 }
 
 func (s *Store) markCardBillsPaidTx(ctx context.Context, tx *sql.Tx, walletID, year, month int, paidAt string) error {
@@ -285,12 +276,14 @@ func getBillByIDTx(ctx context.Context, tx *sql.Tx, id int) (models.Bill, error)
 	)
 	if err := tx.QueryRowContext(ctx, `
 		SELECT id, name, amount, amount_mode, interest_rate, category_id, due_day, frequency,
-			recurrence, start_month, end_month, notes, created_at, wallet_id
+			recurrence, start_month, end_month, notes, created_at, wallet_id,
+			source, installment_start, installment_total
 		FROM bills WHERE id = ?
 	`, id).Scan(
 		&bill.ID, &bill.Name, &bill.Amount, &bill.AmountMode, &bill.InterestRate,
 		&bill.CategoryID, &bill.DueDay, &bill.Frequency, &bill.Recurrence,
 		&bill.StartMonth, &endMonth, &bill.Notes, &created, &walletID,
+		&bill.Source, &bill.InstallmentStart, &bill.InstallmentTotal,
 	); err != nil {
 		return models.Bill{}, fmt.Errorf("get card bill component: %w", err)
 	}
